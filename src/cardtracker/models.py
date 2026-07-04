@@ -1,0 +1,170 @@
+"""SQLModel table definitions for all cardtracker entities."""
+
+from datetime import UTC, date, datetime
+from enum import StrEnum
+
+from sqlalchemy import Column, String
+from sqlmodel import Field, SQLModel
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def enum_column(*, index: bool = False, nullable: bool = False) -> Column:
+    """Store StrEnum fields as plain text so the database holds the enum value,
+    for example 'csv' and 'sold', never the Python member name like CSV."""
+    return Column(String, index=index, nullable=nullable)
+
+
+class Category(StrEnum):
+    SPORTS = "sports"
+    POKEMON = "pokemon"
+
+
+class Grader(StrEnum):
+    PSA = "PSA"
+    BGS = "BGS"
+    SGC = "SGC"
+    CGC = "CGC"
+    RAW = "raw"
+
+
+class CompSourceName(StrEnum):
+    BROWSE = "browse"
+    INSIGHTS = "insights"
+    CSV = "csv"
+
+
+class PriceType(StrEnum):
+    ASK = "ask"
+    SOLD = "sold"
+
+
+class TransactionType(StrEnum):
+    BUY = "buy"
+    SELL = "sell"
+
+
+class InventoryStatus(StrEnum):
+    OWNED = "owned"
+    LISTED = "listed"
+    SOLD = "sold"
+    WATCHING = "watching"
+
+
+class PredictedDirection(StrEnum):
+    UP = "up"
+    DOWN = "down"
+    FLAT = "flat"
+
+
+class Card(SQLModel, table=True):
+    """A specific gradable card identity. A PSA 10 and a PSA 9 are two rows."""
+
+    __tablename__ = "cards"
+
+    id: int | None = Field(default=None, primary_key=True)
+    category: Category = Field(sa_column=enum_column())
+    player_or_character: str = Field(index=True)
+    set_name: str = Field(index=True)
+    year: int
+    card_number: str = ""
+    variation_or_parallel: str = ""
+    grader: Grader = Field(default=Grader.RAW, sa_column=enum_column())
+    grade: str = ""
+    cert_number: str | None = None
+    notes: str = ""
+
+
+class Comp(SQLModel, table=True):
+    """One price observation, either an active ask or a confirmed sale."""
+
+    __tablename__ = "comps"
+
+    id: int | None = Field(default=None, primary_key=True)
+    card_id: int = Field(foreign_key="cards.id", index=True)
+    source: CompSourceName = Field(sa_column=enum_column())
+    price_type: PriceType = Field(sa_column=enum_column(index=True))
+    price: float
+    shipping: float = 0.0
+    currency: str = "USD"
+    sold_date_or_seen_date: date = Field(index=True)
+    listing_url: str = ""
+    title_raw: str = ""
+    condition_raw: str = ""
+    ingested_at: datetime = Field(default_factory=utcnow)
+
+
+class PriceSnapshot(SQLModel, table=True):
+    """Rolling aggregates per card per refresh run. Ask and sold stats are separate rows."""
+
+    __tablename__ = "price_snapshots"
+
+    id: int | None = Field(default=None, primary_key=True)
+    card_id: int = Field(foreign_key="cards.id", index=True)
+    as_of_date: date = Field(index=True)
+    price_type: PriceType = Field(sa_column=enum_column())
+    median_7d: float | None = None
+    median_30d: float | None = None
+    median_90d: float | None = None
+    mean_30d: float | None = None
+    sale_count_30d: int = 0
+    sale_count_90d: int = 0
+    low_30d: float | None = None
+    high_30d: float | None = None
+    spread_30d: float | None = None
+    volatility_30d: float | None = None
+    velocity_30d: float | None = None
+    trend_slope_30d: float | None = None
+    trend_slope_90d: float | None = None
+
+
+class Transaction(SQLModel, table=True):
+    """My own buys and sells."""
+
+    __tablename__ = "transactions"
+
+    id: int | None = Field(default=None, primary_key=True)
+    card_id: int = Field(foreign_key="cards.id", index=True)
+    type: TransactionType = Field(sa_column=enum_column())
+    date: date
+    price: float
+    fees: float = 0.0
+    shipping_cost: float = 0.0
+    platform: str = ""
+    notes: str = ""
+
+
+class Inventory(SQLModel, table=True):
+    """Current holding status per card."""
+
+    __tablename__ = "inventory"
+
+    id: int | None = Field(default=None, primary_key=True)
+    card_id: int = Field(foreign_key="cards.id", index=True)
+    status: InventoryStatus = Field(default=InventoryStatus.WATCHING, sa_column=enum_column())
+    quantity: int = 1
+    acquired_date: date | None = None
+    cost_basis: float | None = None
+    listed_price: float | None = None
+    target_sell_price: float | None = None
+    min_accept_price: float | None = None
+
+
+class Prediction(SQLModel, table=True):
+    """Logged forecasts, scored later against realized direction."""
+
+    __tablename__ = "predictions"
+
+    id: int | None = Field(default=None, primary_key=True)
+    card_id: int = Field(foreign_key="cards.id", index=True)
+    as_of_date: date
+    predicted_direction: PredictedDirection = Field(sa_column=enum_column())
+    confidence: float
+    rationale: str = ""
+    horizon_days: int = 30
+    realized_direction: PredictedDirection | None = Field(
+        default=None, sa_column=enum_column(nullable=True)
+    )
+    was_correct: bool | None = None
