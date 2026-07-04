@@ -5,8 +5,9 @@ Runs entirely on your machine: SQLite database, no paid infrastructure.
 
 ## Status
 
-Phase 0: scaffolding and ingestion. Cards, comps from the eBay Browse API
-(active listings) and from sold-comp CSV imports.
+Phase 1: comp tracking core and stats. Cards, comps from the eBay Browse API
+(active listings) and from sold-comp CSV imports, rolling market stats stored
+as price snapshots, and a scheduled refresh.
 
 ## Setup
 
@@ -41,7 +42,20 @@ cardtracker add-card --category pokemon --player "Charizard" --set "Base Set" --
 cardtracker list-cards
 cardtracker pull-comps 1 --query "1999 pokemon base set charizard psa 9" --limit 50
 cardtracker import-csv sold_comps.csv --card-id 1
+cardtracker refresh-stats
+cardtracker stats 1
+cardtracker schedule-refresh --interval-hours 12
 ```
+
+## Market stats
+
+refresh-stats computes one price snapshot per card per price type (ask and
+sold are always separate) covering: rolling medians (7, 30, 90 day), 30 day
+mean, counts, low, high, spread, volatility, velocity (per week), and linear
+trend slope over 30 and 90 days. All stats use the delivered price, item
+price plus shipping. Rerunning on the same day replaces that day's rows.
+schedule-refresh keeps snapshots fresh on an interval until stopped with
+Ctrl+C.
 
 ## Sold-comp CSV schema
 

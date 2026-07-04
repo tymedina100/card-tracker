@@ -85,3 +85,47 @@ def test_pull_comps_unknown_card():
     result = runner.invoke(app, ["pull-comps", "99", "--query", "charizard"])
     assert result.exit_code == 1
     assert "No card with id 99" in result.output
+
+
+def import_recent_solds(tmp_path):
+    from datetime import date, timedelta
+
+    today = date.today()
+    csv_path = tmp_path / "recent.csv"
+    csv_path.write_text(
+        "card_id,sold_date,price,shipping\n"
+        f"1,{today - timedelta(days=2)},400.00,5.00\n"
+        f"1,{today - timedelta(days=10)},420.00,0\n"
+        f"1,{today - timedelta(days=25)},380.00,0\n",
+        encoding="utf-8",
+    )
+    return runner.invoke(app, ["import-csv", str(csv_path)])
+
+
+def test_refresh_stats_and_stat_line(tmp_path):
+    add_charizard()
+    assert import_recent_solds(tmp_path).exit_code == 0
+
+    result = runner.invoke(app, ["refresh-stats"])
+    assert result.exit_code == 0
+    assert "Wrote 1 snapshot(s)" in result.output
+
+    result = runner.invoke(app, ["stats", "1"])
+    assert result.exit_code == 0
+    assert "sold stats (confirmed sales)" in result.output
+    assert "median 7d / 30d / 90d : 405.00 / 405.00 / 405.00" in result.output
+    assert "count 30d / 90d       : 3 / 3" in result.output
+    assert "ask stats" not in result.output  # no ask comps, no ask block
+
+
+def test_stats_without_snapshots():
+    add_charizard()
+    result = runner.invoke(app, ["stats", "1"])
+    assert result.exit_code == 0
+    assert "No snapshots yet" in result.output
+
+
+def test_refresh_stats_unknown_card():
+    result = runner.invoke(app, ["refresh-stats", "--card-id", "42"])
+    assert result.exit_code == 1
+    assert "No card with id 42" in result.output

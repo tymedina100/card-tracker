@@ -12,6 +12,7 @@ from cardtracker.db import get_engine, get_session, init_db
 from cardtracker.ebay_auth import MissingCredentialsError
 from cardtracker.models import Card, Category, Comp, Grader
 from cardtracker.sources import BrowseApiSource, CsvImportError, CsvImportSource, save_comps
+from cardtracker.stats import latest_snapshots, refresh_snapshots
 
 app = typer.Typer(help="Track card price comps and market stats.", no_args_is_help=True)
 
@@ -158,6 +159,76 @@ def import_csv(
     typer.secho(f"Imported {total} sold comps across {len(by_card)} card(s)", fg="green")
     for message in source.skipped:
         typer.secho(f"Skipped {message}", fg="yellow")
+
+
+@app.command("refresh-stats")
+def refresh_stats(
+    card_id: Annotated[int, typer.Option("--card-id", help="Refresh one card only")] = None,
+) -> None:
+    """Compute and store price snapshots from comps, ask and sold separately."""
+    _, engine = _engine()
+    with get_session(engine) as session:
+        if card_id is not None:
+            _get_card_or_exit(session, card_id)
+        written = refresh_snapshots(session, card_id=card_id)
+    typer.secho(f"Wrote {len(written)} snapshot(s)", fg="green")
+
+
+def _money(value: float | None) -> str:
+    return f"{value:,.2f}" if value is not None else "n/a"
+
+
+def _slope_text(value: float | None) -> str:
+    return f"{value:+.2f}/day" if value is not None else "n/a"
+
+
+@app.command("stats")
+def stats(
+    card_id: Annotated[int, typer.Argument(help="Card id to show stats for")],
+) -> None:
+    """Print the full stat line for a card, ask and sold kept separate."""
+    _, engine = _engine()
+    with get_session(engine) as session:
+        card = _get_card_or_exit(session, card_id)
+        snapshots = latest_snapshots(session, card_id)
+        typer.echo(f"Card {card_id}: {_describe(card)}")
+        if not snapshots:
+            typer.echo("No snapshots yet. Run 'cardtracker refresh-stats' after adding comps.")
+            return
+        labels = {
+            "sold": "sold stats (confirmed sales)",
+            "ask": "ask stats (active listings, not sale prices)",
+        }
+        for price_type in ("sold", "ask"):
+            snapshot = snapshots.get(price_type)
+            if snapshot is None:
+                continue
+            typer.echo("")
+            typer.secho(f"{labels[price_type]} as of {snapshot.as_of_date}", bold=True)
+            typer.echo(f"  median 7d / 30d / 90d : {_money(snapshot.median_7d)} / "
+                       f"{_money(snapshot.median_30d)} / {_money(snapshot.median_90d)}")
+            typer.echo(f"  mean 30d              : {_money(snapshot.mean_30d)}")
+            typer.echo(f"  count 30d / 90d       : {snapshot.sale_count_30d} / "
+                       f"{snapshot.sale_count_90d}")
+            typer.echo(f"  low / high 30d        : {_money(snapshot.low_30d)} / "
+                       f"{_money(snapshot.high_30d)}")
+            typer.echo(f"  spread 30d            : {_money(snapshot.spread_30d)}")
+            typer.echo(f"  volatility 30d        : {_money(snapshot.volatility_30d)}")
+            typer.echo(f"  velocity 30d          : {snapshot.velocity_30d:.1f} per week")
+            typer.echo(f"  slope 30d / 90d       : {_slope_text(snapshot.trend_slope_30d)} / "
+                       f"{_slope_text(snapshot.trend_slope_90d)}")
+
+
+@app.command("schedule-refresh")
+def schedule_refresh(
+    interval_hours: Annotated[
+        float, typer.Option("--interval-hours", help="Hours between refresh runs")
+    ] = 12.0,
+) -> None:
+    """Run the snapshot refresh on a schedule until stopped with Ctrl+C."""
+    from cardtracker.scheduler import run_scheduler
+
+    run_scheduler(interval_hours)
 
 
 if __name__ == "__main__":
