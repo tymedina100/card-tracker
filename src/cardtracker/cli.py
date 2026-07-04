@@ -211,6 +211,81 @@ def stats(
                        f"{_slope_text(snapshot.trend_slope_90d)}")
 
 
+@app.command("log-buy")
+def log_buy_command(
+    card_id: Annotated[int, typer.Argument(help="Card id that was bought")],
+    price: Annotated[float, typer.Option("--price", help="Purchase price")],
+    buy_date: Annotated[
+        str, typer.Option("--date", help="Purchase date YYYY-MM-DD, default today")
+    ] = "",
+    fees: Annotated[float, typer.Option(help="Buyer-side fees")] = 0.0,
+    shipping: Annotated[float, typer.Option(help="Shipping paid")] = 0.0,
+    taxes: Annotated[float, typer.Option(help="Sales tax paid")] = 0.0,
+    grading: Annotated[float, typer.Option(help="Grading cost for this copy")] = 0.0,
+    platform: Annotated[str, typer.Option(help="Where it was bought")] = "",
+    notes: Annotated[str, typer.Option(help="Free-form notes")] = "",
+) -> None:
+    """Record buying one copy of a card with the full cost breakdown."""
+    from datetime import date as date_type
+
+    from cardtracker.portfolio import log_buy
+
+    _, engine = _engine()
+    parsed_date = None
+    if buy_date:
+        try:
+            parsed_date = date_type.fromisoformat(buy_date)
+        except ValueError:
+            typer.secho(f"--date '{buy_date}' is not a valid YYYY-MM-DD date", fg="red")
+            raise typer.Exit(code=1) from None
+    with get_session(engine) as session:
+        card = _get_card_or_exit(session, card_id)
+        transaction = log_buy(session, card_id, price, buy_date=parsed_date,
+                              fees=fees, shipping=shipping, taxes=taxes,
+                              grading=grading, platform=platform, notes=notes)
+        typer.secho(
+            f"Logged buy of card {card_id} ({_describe(card)}) on {transaction.date}: "
+            f"total cost {transaction.total_cost:,.2f} "
+            f"(price {price:,.2f} + fees {fees:,.2f} + shipping {shipping:,.2f} "
+            f"+ taxes {taxes:,.2f} + grading {grading:,.2f})",
+            fg="green",
+        )
+
+
+@app.command("cost-basis")
+def cost_basis_command(
+    card_id: Annotated[int, typer.Option("--card-id", help="One card only")] = None,
+) -> None:
+    """Show total cost basis per card and per copy owned."""
+    from cardtracker.portfolio import cost_basis_summary
+
+    _, engine = _engine()
+    with get_session(engine) as session:
+        if card_id is not None:
+            _get_card_or_exit(session, card_id)
+        lines = cost_basis_summary(session, card_id=card_id)
+        if not lines:
+            typer.echo("No buys logged yet. Record one with 'cardtracker log-buy'.")
+            return
+        header = (f"{'id':>4}  {'card':<52}  {'copies':>6}  {'price':>10}  "
+                  f"{'fees':>8}  {'ship':>8}  {'taxes':>8}  {'grading':>8}  "
+                  f"{'total':>10}  {'per copy':>10}")
+        typer.echo(header)
+        typer.echo("-" * len(header))
+        for line in lines:
+            typer.echo(
+                f"{line.card.id:>4}  {_describe(line.card):<52}  {line.copies:>6}  "
+                f"{line.price_total:>10,.2f}  {line.fees_total:>8,.2f}  "
+                f"{line.shipping_total:>8,.2f}  {line.taxes_total:>8,.2f}  "
+                f"{line.grading_total:>8,.2f}  {line.total_cost:>10,.2f}  "
+                f"{line.cost_per_copy:>10,.2f}"
+            )
+        if len(lines) > 1:
+            grand_total = sum(line.total_cost for line in lines)
+            typer.secho(f"Total cost basis across {len(lines)} cards: {grand_total:,.2f}",
+                        bold=True)
+
+
 @app.command("predict")
 def predict(
     card_id: Annotated[int, typer.Argument(help="Card id to predict")],

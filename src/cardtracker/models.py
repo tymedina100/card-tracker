@@ -144,8 +144,15 @@ class Transaction(SQLModel, table=True):
     price: float
     fees: float = 0.0
     shipping_cost: float = 0.0
+    taxes: float = 0.0
+    grading_cost: float = 0.0
     platform: str = ""
     notes: str = ""
+
+    @property
+    def total_cost(self) -> float:
+        """Full cost of a buy: price plus fees, shipping, taxes, and grading."""
+        return self.price + self.fees + self.shipping_cost + self.taxes + self.grading_cost
 
 
 class Inventory(SQLModel, table=True):

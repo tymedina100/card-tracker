@@ -5,9 +5,9 @@ Runs entirely on your machine: SQLite database, no paid infrastructure.
 
 ## Status
 
-Phase 2: prediction engine. Cards, comp ingestion (Browse API asks, CSV
-solds), rolling market stats with scheduled refresh, and an explainable
-comparable-cohort prediction engine with backtesting.
+Phase 2 plus feature 1. Cards, comp ingestion (Browse API asks, CSV solds),
+rolling market stats with scheduled refresh, an explainable comparable-cohort
+prediction engine with backtesting, and buy logging with total cost basis.
 
 ## Setup
 
@@ -48,7 +48,17 @@ cardtracker schedule-refresh --interval-hours 12
 cardtracker predict 1 --horizon-days 30
 cardtracker backtest --horizon-days 30 --step-days 7
 cardtracker score-predictions
+cardtracker log-buy 1 --price 380 --shipping 12.50 --taxes 31.35 --date 2026-05-02
+cardtracker cost-basis
 ```
+
+## Cost basis
+
+log-buy records one copy per run with the full cost breakdown: price, fees,
+shipping, taxes, and grading cost. cost-basis shows the per-card totals and
+the average cost per copy owned. Inventory quantity, status, and acquired
+date stay in sync automatically. Adding new columns to the schema is handled
+in place; existing databases are migrated without losing data.
 
 ## Market stats
 

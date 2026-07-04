@@ -153,6 +153,35 @@ def test_predict_and_backtest_cli(tmp_path):
     assert "Scored 0 prediction(s)" in result.output  # horizon not elapsed yet
 
 
+def test_log_buy_and_cost_basis_cli():
+    add_charizard()
+    result = runner.invoke(app, [
+        "log-buy", "1", "--price", "380", "--fees", "5", "--shipping", "10",
+        "--taxes", "31.35", "--grading", "25", "--date", "2026-05-01",
+        "--platform", "ebay",
+    ])
+    assert result.exit_code == 0
+    assert "total cost 451.35" in result.output
+
+    result = runner.invoke(app, ["cost-basis"])
+    assert result.exit_code == 0
+    assert "451.35" in result.output
+    assert "Charizard" in result.output
+
+
+def test_log_buy_bad_date():
+    add_charizard()
+    result = runner.invoke(app, ["log-buy", "1", "--price", "100", "--date", "05/01/2026"])
+    assert result.exit_code == 1
+    assert "not a valid" in result.output
+
+
+def test_cost_basis_empty():
+    result = runner.invoke(app, ["cost-basis"])
+    assert result.exit_code == 0
+    assert "No buys logged yet" in result.output
+
+
 def test_backtest_without_data():
     result = runner.invoke(app, ["backtest"])
     assert result.exit_code == 0
