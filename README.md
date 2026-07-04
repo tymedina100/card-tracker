@@ -5,9 +5,9 @@ Runs entirely on your machine: SQLite database, no paid infrastructure.
 
 ## Status
 
-Phase 1: comp tracking core and stats. Cards, comps from the eBay Browse API
-(active listings) and from sold-comp CSV imports, rolling market stats stored
-as price snapshots, and a scheduled refresh.
+Phase 2: prediction engine. Cards, comp ingestion (Browse API asks, CSV
+solds), rolling market stats with scheduled refresh, and an explainable
+comparable-cohort prediction engine with backtesting.
 
 ## Setup
 
@@ -45,6 +45,9 @@ cardtracker import-csv sold_comps.csv --card-id 1
 cardtracker refresh-stats
 cardtracker stats 1
 cardtracker schedule-refresh --interval-hours 12
+cardtracker predict 1 --horizon-days 30
+cardtracker backtest --horizon-days 30 --step-days 7
+cardtracker score-predictions
 ```
 
 ## Market stats
@@ -56,6 +59,21 @@ trend slope over 30 and 90 days. All stats use the delivered price, item
 price plus shipping. Rerunning on the same day replaces that day's rows.
 schedule-refresh keeps snapshots fresh on an interval until stopped with
 Ctrl+C.
+
+## Predictions
+
+predict builds a cohort of comparable cards (same player or character, set,
+and year, grade within 1 point, same or base parallel), measures 30 day
+momentum for the card and its cohort from sold comps (ask prices only as a
+flagged fallback), and combines them (60 percent own trend, 40 percent
+cohort median) into a direction, a confidence score, and a written rationale
+naming the cards and numbers behind it. Predictions are logged.
+
+backtest replays history: it predicts at past dates using only the comps
+known at each date, then scores each call against the sold median that
+followed. score-predictions fills in outcomes for logged live predictions
+once their horizon has elapsed. Realized outcomes always come from sold
+prices, never asks.
 
 ## Sold-comp CSV schema
 

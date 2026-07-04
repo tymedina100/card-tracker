@@ -77,6 +77,18 @@ class Card(SQLModel, table=True):
     notes: str = ""
 
 
+def describe_card(card: "Card") -> str:
+    """Short human-readable label, e.g. '1999 Base Set Charizard #4 PSA 9'."""
+    grade_part = f"{card.grader} {card.grade}".strip() if card.grader != Grader.RAW else "raw"
+    bits = [str(card.year), card.set_name, card.player_or_character]
+    if card.card_number:
+        bits.append(f"#{card.card_number}")
+    if card.variation_or_parallel:
+        bits.append(card.variation_or_parallel)
+    bits.append(grade_part)
+    return " ".join(bits)
+
+
 class Comp(SQLModel, table=True):
     """One price observation, either an active ask or a confirmed sale."""
 

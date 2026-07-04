@@ -125,6 +125,40 @@ def test_stats_without_snapshots():
     assert "No snapshots yet" in result.output
 
 
+def test_predict_and_backtest_cli(tmp_path):
+    from datetime import date, timedelta
+
+    add_charizard()
+    today = date.today()
+    lines = ["card_id,sold_date,price"]
+    for days_ago in range(150, 0, -3):
+        age = 150 - days_ago
+        lines.append(f"1,{today - timedelta(days=days_ago)},{100 + 0.6 * age:.2f}")
+    csv_path = tmp_path / "trend.csv"
+    csv_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert runner.invoke(app, ["import-csv", str(csv_path)]).exit_code == 0
+
+    result = runner.invoke(app, ["predict", "1"])
+    assert result.exit_code == 0
+    assert "UP, confidence" in result.output
+    assert "Rationale:" in result.output
+    assert "Logged to predictions table." in result.output
+
+    result = runner.invoke(app, ["backtest"])
+    assert result.exit_code == 0
+    assert "Hit rate: 100.0%" in result.output
+
+    result = runner.invoke(app, ["score-predictions"])
+    assert result.exit_code == 0
+    assert "Scored 0 prediction(s)" in result.output  # horizon not elapsed yet
+
+
+def test_backtest_without_data():
+    result = runner.invoke(app, ["backtest"])
+    assert result.exit_code == 0
+    assert "Nothing scorable" in result.output
+
+
 def test_refresh_stats_unknown_card():
     result = runner.invoke(app, ["refresh-stats", "--card-id", "42"])
     assert result.exit_code == 1

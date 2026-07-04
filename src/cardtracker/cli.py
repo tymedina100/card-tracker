@@ -10,7 +10,7 @@ from sqlmodel import select
 from cardtracker.config import load_settings
 from cardtracker.db import get_engine, get_session, init_db
 from cardtracker.ebay_auth import MissingCredentialsError
-from cardtracker.models import Card, Category, Comp, Grader
+from cardtracker.models import Card, Category, Comp, Grader, describe_card
 from cardtracker.sources import BrowseApiSource, CsvImportError, CsvImportSource, save_comps
 from cardtracker.stats import latest_snapshots, refresh_snapshots
 
@@ -73,15 +73,7 @@ def add_card(
         typer.secho(f"Added card {card.id}: {_describe(card)}", fg="green")
 
 
-def _describe(card: Card) -> str:
-    grade_part = f"{card.grader} {card.grade}".strip() if card.grader != Grader.RAW else "raw"
-    bits = [str(card.year), card.set_name, card.player_or_character]
-    if card.card_number:
-        bits.append(f"#{card.card_number}")
-    if card.variation_or_parallel:
-        bits.append(card.variation_or_parallel)
-    bits.append(grade_part)
-    return " ".join(bits)
+_describe = describe_card
 
 
 @app.command("list-cards")
@@ -217,6 +209,76 @@ def stats(
             typer.echo(f"  velocity 30d          : {snapshot.velocity_30d:.1f} per week")
             typer.echo(f"  slope 30d / 90d       : {_slope_text(snapshot.trend_slope_30d)} / "
                        f"{_slope_text(snapshot.trend_slope_90d)}")
+
+
+@app.command("predict")
+def predict(
+    card_id: Annotated[int, typer.Argument(help="Card id to predict")],
+    horizon_days: Annotated[
+        int, typer.Option("--horizon-days", help="Days ahead to predict")
+    ] = 30,
+    log: Annotated[bool, typer.Option(help="Log the prediction for later scoring")] = True,
+) -> None:
+    """Predict direction with confidence and a written rationale."""
+    from cardtracker.predict import predict_card
+
+    _, engine = _engine()
+    with get_session(engine) as session:
+        card = _get_card_or_exit(session, card_id)
+        result = predict_card(session, card_id, horizon_days=horizon_days, log=log)
+        typer.echo(f"Card {card_id}: {_describe(card)}")
+        color = {"up": "green", "down": "red", "flat": "yellow"}[str(result.direction)]
+        typer.secho(
+            f"Prediction as of {result.as_of} ({horizon_days} day horizon): "
+            f"{str(result.direction).upper()}, confidence {result.confidence:.2f}",
+            fg=color, bold=True,
+        )
+        typer.echo(f"Rationale: {result.rationale}")
+        if log:
+            typer.echo("Logged to predictions table.")
+
+
+@app.command("backtest")
+def backtest_command(
+    horizon_days: Annotated[
+        int, typer.Option("--horizon-days", help="Prediction horizon to test")
+    ] = 30,
+    step_days: Annotated[
+        int, typer.Option("--step-days", help="Days between replayed prediction dates")
+    ] = 7,
+    card_id: Annotated[int, typer.Option("--card-id", help="Backtest one card only")] = None,
+) -> None:
+    """Replay historical comps and report prediction hit rate."""
+    from cardtracker.predict import backtest
+
+    _, engine = _engine()
+    with get_session(engine) as session:
+        if card_id is not None:
+            _get_card_or_exit(session, card_id)
+        report = backtest(session, horizon_days=horizon_days, step_days=step_days,
+                          card_id=card_id)
+    typer.echo(f"Backtest: {horizon_days} day horizon, replayed every {step_days} day(s)")
+    if not report.scored:
+        typer.echo("Nothing scorable. Backtesting needs sold comps spanning at least "
+                   f"{30 + horizon_days} days for a card.")
+        return
+    cards_covered = len({row.card_id for row in report.rows})
+    typer.echo(f"Scored {report.scored} prediction(s) across {cards_covered} card(s)")
+    typer.secho(f"Hit rate: {report.hit_rate:.1%} ({report.hits}/{report.scored})",
+                bold=True)
+    for direction, (hits, total) in sorted(report.by_direction().items()):
+        typer.echo(f"  predicted {direction}: {hits}/{total} correct")
+
+
+@app.command("score-predictions")
+def score_predictions_command() -> None:
+    """Fill in realized outcomes for logged predictions whose horizon has passed."""
+    from cardtracker.predict import score_due_predictions
+
+    _, engine = _engine()
+    with get_session(engine) as session:
+        scored = score_due_predictions(session)
+    typer.secho(f"Scored {scored} prediction(s)", fg="green")
 
 
 @app.command("schedule-refresh")
