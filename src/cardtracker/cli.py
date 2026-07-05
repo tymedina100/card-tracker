@@ -325,6 +325,99 @@ def cost_basis_command(
                         bold=True)
 
 
+@app.command("log-sell")
+def log_sell_command(
+    card_id: Annotated[int, typer.Argument(help="Card id that was sold")],
+    price: Annotated[float, typer.Option("--price", help="Actual sale price")],
+    sell_date: Annotated[
+        str, typer.Option("--date", help="Sale date YYYY-MM-DD, default today")
+    ] = "",
+    fees: Annotated[float, typer.Option(help="Actual total fees on the sale")] = 0.0,
+    estimate_fees: Annotated[
+        bool, typer.Option("--estimate-fees", help="Estimate fees from the fee model "
+                           "instead of passing --fees")
+    ] = False,
+    shipping_cost: Annotated[
+        float, typer.Option("--shipping-cost", help="What shipping cost me")
+    ] = 0.0,
+    platform: Annotated[str, typer.Option(help="Where it sold")] = "",
+    notes: Annotated[str, typer.Option(help="Free-form notes")] = "",
+) -> None:
+    """Record selling one copy and show realized profit for the sale."""
+    from datetime import date as date_type
+
+    from cardtracker.fees import FeeModel, compute_net
+    from cardtracker.portfolio import avg_cost_per_copy, log_sell
+
+    settings, engine = _engine()
+    parsed_date = None
+    if sell_date:
+        try:
+            parsed_date = date_type.fromisoformat(sell_date)
+        except ValueError:
+            typer.secho(f"--date '{sell_date}' is not a valid YYYY-MM-DD date", fg="red")
+            raise typer.Exit(code=1) from None
+    with get_session(engine) as session:
+        card = _get_card_or_exit(session, card_id)
+        if estimate_fees:
+            if fees:
+                typer.secho("Use either --fees or --estimate-fees, not both", fg="red")
+                raise typer.Exit(code=1)
+            breakdown = compute_net(FeeModel.from_settings(settings), price)
+            fees = breakdown.total_fees
+            typer.echo(f"Estimated fees from fee model: {fees:,.2f}")
+        transaction = log_sell(session, card_id, price, sell_date=parsed_date,
+                               fees=fees, shipping_cost=shipping_cost,
+                               platform=platform, notes=notes)
+        cost = avg_cost_per_copy(session, card_id)
+        net = price - fees - shipping_cost
+        typer.secho(f"Logged sell of card {card_id} ({_describe(card)}) on "
+                    f"{transaction.date}: net {net:,.2f} after fees {fees:,.2f} "
+                    f"and shipping {shipping_cost:,.2f}", fg="green")
+        if cost is not None:
+            profit = net - cost
+            roi = f" ({profit / cost * 100:+.1f}%)" if cost else ""
+            typer.secho(f"Realized profit vs avg cost {cost:,.2f}: "
+                        f"{profit:+,.2f}{roi}", bold=True)
+        else:
+            typer.echo("No buy logged for this card, so no cost basis to compare.")
+
+
+@app.command("realized")
+def realized_command(
+    card_id: Annotated[int, typer.Option("--card-id", help="One card only")] = None,
+) -> None:
+    """Realized P&L across all sold cards."""
+    from cardtracker.portfolio import realized_summary
+
+    _, engine = _engine()
+    with get_session(engine) as session:
+        if card_id is not None:
+            _get_card_or_exit(session, card_id)
+        lines = realized_summary(session, card_id=card_id)
+        if not lines:
+            typer.echo("No sells logged yet. Record one with 'cardtracker log-sell'.")
+            return
+        header = (f"{'date':<10}  {'card':<48}  {'sale':>9}  {'fees':>8}  {'ship':>7}  "
+                  f"{'net':>9}  {'cost':>9}  {'profit':>9}  {'roi':>8}")
+        typer.echo(header)
+        typer.echo("-" * len(header))
+        for line in lines:
+            cost = f"{line.cost_allocated:,.2f}" if line.cost_allocated is not None else "n/a"
+            profit = f"{line.profit:+,.2f}" if line.profit is not None else "n/a"
+            roi = f"{line.roi_pct:+.1f}%" if line.roi_pct is not None else "n/a"
+            typer.echo(
+                f"{line.sale_date}  {_describe(line.card):<48}  {line.sale_price:>9,.2f}  "
+                f"{line.fees:>8,.2f}  {line.shipping_cost:>7,.2f}  {line.net:>9,.2f}  "
+                f"{cost:>9}  {profit:>9}  {roi:>8}"
+            )
+        with_profit = [line for line in lines if line.profit is not None]
+        if with_profit:
+            total = sum(line.profit for line in with_profit)
+            typer.secho(f"Total realized profit: {total:+,.2f} across "
+                        f"{len(with_profit)} sale(s)", bold=True)
+
+
 @app.command("unrealized")
 def unrealized_command(
     shipping_cost: Annotated[

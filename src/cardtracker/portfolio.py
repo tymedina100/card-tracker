@@ -146,6 +146,95 @@ def unrealized_summary(session: Session, fee_model: FeeModel,
     return lines
 
 
+def log_sell(session: Session, card_id: int, price: float, sell_date: date | None = None,
+             fees: float = 0.0, shipping_cost: float = 0.0, platform: str = "",
+             notes: str = "") -> Transaction:
+    """Record selling one copy with actual sale price and actual fees. Inventory
+    quantity drops by one; status flips to sold when nothing is left."""
+    transaction = Transaction(
+        card_id=card_id,
+        type=TransactionType.SELL,
+        date=sell_date or date.today(),
+        price=price,
+        fees=fees,
+        shipping_cost=shipping_cost,
+        platform=platform,
+        notes=notes,
+    )
+    session.add(transaction)
+    inventory = get_or_create_inventory(session, card_id)
+    inventory.quantity = max(0, inventory.quantity - 1)
+    if inventory.quantity == 0:
+        inventory.status = InventoryStatus.SOLD
+    session.add(inventory)
+    session.commit()
+    session.refresh(transaction)
+    return transaction
+
+
+def avg_cost_per_copy(session: Session, card_id: int) -> float | None:
+    """Average total buy cost across all copies of a card ever bought."""
+    buys = session.exec(
+        select(Transaction)
+        .where(Transaction.type == TransactionType.BUY)
+        .where(Transaction.card_id == card_id)
+    ).all()
+    if not buys:
+        return None
+    return sum(b.total_cost for b in buys) / len(buys)
+
+
+@dataclass
+class RealizedLine:
+    """Actual profit from one logged sale."""
+
+    card: Card
+    sale_date: date
+    sale_price: float
+    fees: float
+    shipping_cost: float
+    cost_allocated: float | None
+    platform: str
+
+    @property
+    def net(self) -> float:
+        return self.sale_price - self.fees - self.shipping_cost
+
+    @property
+    def profit(self) -> float | None:
+        return self.net - self.cost_allocated if self.cost_allocated is not None else None
+
+    @property
+    def roi_pct(self) -> float | None:
+        if self.profit is None or not self.cost_allocated:
+            return None
+        return self.profit / self.cost_allocated * 100
+
+
+def realized_summary(session: Session, card_id: int | None = None) -> list[RealizedLine]:
+    """Realized P&L across all logged sells. Cost is allocated per copy as the
+    average buy cost for that card; sells with no logged buy show no profit."""
+    query = select(Transaction).where(Transaction.type == TransactionType.SELL)
+    if card_id is not None:
+        query = query.where(Transaction.card_id == card_id)
+    sells = session.exec(query.order_by(Transaction.date)).all()
+    costs: dict[int, float | None] = {}
+    lines = []
+    for sell in sells:
+        if sell.card_id not in costs:
+            costs[sell.card_id] = avg_cost_per_copy(session, sell.card_id)
+        lines.append(RealizedLine(
+            card=session.get(Card, sell.card_id),
+            sale_date=sell.date,
+            sale_price=sell.price,
+            fees=sell.fees,
+            shipping_cost=sell.shipping_cost,
+            cost_allocated=costs[sell.card_id],
+            platform=sell.platform,
+        ))
+    return lines
+
+
 def cost_basis_summary(session: Session, card_id: int | None = None) -> list[CostBasisLine]:
     """Per-card cost basis built from buy transactions."""
     query = select(Transaction).where(Transaction.type == TransactionType.BUY)

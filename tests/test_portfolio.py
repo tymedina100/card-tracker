@@ -123,6 +123,55 @@ class TestUnrealized:
         assert line.profit == 180.0
 
 
+class TestRealized:
+    def test_sell_decrements_inventory_and_flips_status(self, session, sample_card):
+        from cardtracker.portfolio import log_sell
+
+        log_buy(session, sample_card.id, price=100.0)
+        log_buy(session, sample_card.id, price=100.0)
+        log_sell(session, sample_card.id, price=180.0)
+        inventory = session.exec(select(Inventory)).one()
+        assert inventory.quantity == 1
+        assert inventory.status == "owned"
+        log_sell(session, sample_card.id, price=190.0)
+        session.refresh(inventory)
+        assert inventory.quantity == 0
+        assert inventory.status == "sold"
+
+    def test_realized_profit_and_roi(self, session, sample_card):
+        from cardtracker.portfolio import log_sell, realized_summary
+
+        log_buy(session, sample_card.id, price=90.0, fees=5.0, taxes=5.0)  # cost 100
+        log_sell(session, sample_card.id, price=180.0, fees=24.0, shipping_cost=6.0,
+                 sell_date=date(2026, 7, 1))
+        lines = realized_summary(session)
+        assert len(lines) == 1
+        line = lines[0]
+        assert line.net == 150.0
+        assert line.cost_allocated == 100.0
+        assert line.profit == 50.0
+        assert line.roi_pct == 50.0
+
+    def test_avg_cost_allocation_across_copies(self, session, sample_card):
+        from cardtracker.portfolio import log_sell, realized_summary
+
+        log_buy(session, sample_card.id, price=100.0)
+        log_buy(session, sample_card.id, price=200.0)  # avg 150
+        log_sell(session, sample_card.id, price=250.0)
+        line = realized_summary(session)[0]
+        assert line.cost_allocated == 150.0
+        assert line.profit == 100.0
+
+    def test_sell_without_buy_shows_no_profit(self, session, sample_card):
+        from cardtracker.portfolio import log_sell, realized_summary
+
+        log_sell(session, sample_card.id, price=50.0)
+        line = realized_summary(session)[0]
+        assert line.cost_allocated is None
+        assert line.profit is None
+        assert line.net == 50.0
+
+
 def test_migration_adds_new_columns(tmp_path):
     import sqlite3
 
