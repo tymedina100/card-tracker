@@ -67,7 +67,7 @@ Steps:
 1. Push this repository to GitHub (already done if you are reading this
    from github.com/tymedina100/card-tracker).
 2. At share.streamlit.io, create a new app from that repository.
-3. Set the main file path to `src/cardtracker/dashboard.py`.
+3. Set the main file path to `streamlit_app.py`.
 4. Leave eBay keys unset unless you want live Browse API pulls to work in
    the hosted app; CSV-imported data and everything else works without
    them. To set them, use the app's Secrets manager in Streamlit Cloud

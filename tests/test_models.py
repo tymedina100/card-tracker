@@ -16,6 +16,26 @@ from cardtracker.models import (
 )
 
 
+def test_models_module_reexecution_is_idempotent():
+    """Streamlit Cloud can re-execute the models module in one process. The
+    second pass must extend the existing tables, not raise 'already defined'.
+    Runs in a subprocess because reloading mapped classes poisons the current
+    process for every later test."""
+    import subprocess
+    import sys
+
+    code = (
+        "import importlib\n"
+        "from cardtracker import models\n"
+        "importlib.reload(models)\n"
+        "print('reimport ok')\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code],
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr
+    assert "reimport ok" in result.stdout
+
+
 def test_card_round_trip(session, sample_card):
     fetched = session.exec(select(Card)).one()
     assert fetched.player_or_character == "Charizard"

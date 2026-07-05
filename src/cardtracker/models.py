@@ -63,6 +63,7 @@ class Card(SQLModel, table=True):
     """A specific gradable card identity. A PSA 10 and a PSA 9 are two rows."""
 
     __tablename__ = "cards"
+    __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
     category: Category = Field(sa_column=enum_column())
@@ -93,6 +94,7 @@ class Comp(SQLModel, table=True):
     """One price observation, either an active ask or a confirmed sale."""
 
     __tablename__ = "comps"
+    __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
     card_id: int = Field(foreign_key="cards.id", index=True)
@@ -112,6 +114,7 @@ class PriceSnapshot(SQLModel, table=True):
     """Rolling aggregates per card per refresh run. Ask and sold stats are separate rows."""
 
     __tablename__ = "price_snapshots"
+    __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
     card_id: int = Field(foreign_key="cards.id", index=True)
@@ -136,6 +139,7 @@ class Transaction(SQLModel, table=True):
     """My own buys and sells."""
 
     __tablename__ = "transactions"
+    __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
     card_id: int = Field(foreign_key="cards.id", index=True)
@@ -159,6 +163,7 @@ class Inventory(SQLModel, table=True):
     """Current holding status per card."""
 
     __tablename__ = "inventory"
+    __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
     card_id: int = Field(foreign_key="cards.id", index=True)
@@ -175,6 +180,7 @@ class Prediction(SQLModel, table=True):
     """Logged forecasts, scored later against realized direction."""
 
     __tablename__ = "predictions"
+    __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
     card_id: int = Field(foreign_key="cards.id", index=True)
