@@ -470,6 +470,91 @@ def unrealized_command(
             typer.echo("Cards showing 'no data' need comps and a refresh-stats run.")
 
 
+@app.command("max-buy")
+def max_buy_command(
+    card_id: Annotated[int, typer.Argument(help="Card id to analyze")],
+    target_roi: Annotated[
+        float, typer.Option("--target-roi", help="Target ROI percent")
+    ] = None,
+    target_profit: Annotated[
+        float, typer.Option("--target-profit", help="Target profit in dollars")
+    ] = None,
+    shipping_cost: Annotated[
+        float, typer.Option("--shipping-cost", help="Assumed cost to ship the resale")
+    ] = 0.0,
+) -> None:
+    """Most I should pay for this card to hit a target ROI or profit."""
+    from cardtracker.deals import max_buy_price
+    from cardtracker.fees import FeeModel
+
+    settings, engine = _engine()
+    if target_roi is None and target_profit is None:
+        target_roi = 30.0
+    with get_session(engine) as session:
+        card = _get_card_or_exit(session, card_id)
+        try:
+            result = max_buy_price(session, card_id, FeeModel.from_settings(settings),
+                                   target_roi_pct=target_roi,
+                                   target_profit=target_profit,
+                                   shipping_cost=shipping_cost)
+        except ValueError as exc:
+            typer.secho(str(exc), fg="red")
+            raise typer.Exit(code=1) from None
+        typer.echo(f"Card {card_id}: {_describe(card)}")
+        if result is None:
+            typer.echo("No market data. Import comps and run refresh-stats first.")
+            raise typer.Exit(code=1)
+        flag = " [ask median, no sold data]" if result.market_price_type == "ask" else ""
+        target_text = (f"{result.target_roi_pct:.0f}% ROI" if result.target_roi_pct
+                       is not None else f"{result.target_profit:,.2f} profit")
+        typer.echo(f"Market ({result.market_price_type} median 30d){flag}: "
+                   f"{result.market:,.2f}")
+        typer.echo(f"Net proceeds if sold at market: {result.net_at_market:,.2f}")
+        typer.secho(f"Max buy price for {target_text}: {result.max_buy:,.2f} "
+                    "(delivered, price plus shipping)", fg="green", bold=True)
+
+
+@app.command("deals")
+def deals_command(
+    target_roi: Annotated[
+        float, typer.Option("--target-roi", help="Target ROI percent")
+    ] = 30.0,
+    days: Annotated[
+        int, typer.Option("--days", help="Only consider asks seen this recently")
+    ] = 14,
+    shipping_cost: Annotated[
+        float, typer.Option("--shipping-cost", help="Assumed cost to ship the resale")
+    ] = 0.0,
+) -> None:
+    """Active listings priced below my max buy price."""
+    from cardtracker.deals import find_deals
+    from cardtracker.fees import FeeModel
+
+    settings, engine = _engine()
+    with get_session(engine) as session:
+        deals = find_deals(session, FeeModel.from_settings(settings),
+                           target_roi_pct=target_roi, days=days,
+                           shipping_cost=shipping_cost)
+        if not deals:
+            typer.echo(f"No deals found at {target_roi:.0f}% target ROI among asks "
+                       f"seen in the last {days} days. Pull fresh asks with "
+                       "'cardtracker pull-comps'.")
+            return
+        typer.echo(f"Deals at {target_roi:.0f}% target ROI (asks from last {days} days):")
+        for deal in deals:
+            flag = " *" if deal.market_price_type == "ask" else ""
+            typer.echo(f"  card {deal.card.id} {_describe(deal.card)}{flag}")
+            typer.secho(f"    {deal.delivered_price:,.2f} delivered vs max buy "
+                        f"{deal.max_buy:,.2f} ({deal.discount_pct:.0f}% under), "
+                        f"seen {deal.seen_date}", fg="green")
+            if deal.title:
+                typer.echo(f"    {deal.title}")
+            if deal.listing_url:
+                typer.echo(f"    {deal.listing_url}")
+        if any(d.market_price_type == "ask" for d in deals):
+            typer.secho("* market stat from ask median, no sold data", fg="yellow")
+
+
 @app.command("predict")
 def predict(
     card_id: Annotated[int, typer.Argument(help="Card id to predict")],
