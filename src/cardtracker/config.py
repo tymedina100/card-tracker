@@ -26,6 +26,13 @@ class Settings:
     ebay_marketplace_id: str = "EBAY_US"
     insights_enabled: bool = False
     db_path: str = field(default_factory=_default_db_path)
+    fee_final_value_pct: float = 13.25
+    fee_per_order: float = 0.30
+    fee_promoted_pct: float = 0.0
+    fee_payment_pct: float = 0.0
+    fee_payment_fixed: float = 0.0
+    fee_fvf_on_shipping: bool = True
+    fee_fvf_on_tax: bool = True
 
     @property
     def ebay_api_base(self) -> str:
@@ -34,6 +41,23 @@ class Settings:
     @property
     def has_ebay_credentials(self) -> bool:
         return bool(self.ebay_client_id and self.ebay_client_secret)
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a number, got '{raw}'") from None
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes")
 
 
 def load_settings(env_file: str | Path | None = None) -> Settings:
@@ -49,4 +73,11 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         ebay_marketplace_id=os.getenv("EBAY_MARKETPLACE_ID", "EBAY_US").strip(),
         insights_enabled=os.getenv("INSIGHTS_ENABLED", "").strip().lower() in ("1", "true", "yes"),
         db_path=os.getenv("DB_PATH", "").strip() or _default_db_path(),
+        fee_final_value_pct=_env_float("FEE_FINAL_VALUE_PCT", 13.25),
+        fee_per_order=_env_float("FEE_PER_ORDER", 0.30),
+        fee_promoted_pct=_env_float("FEE_PROMOTED_PCT", 0.0),
+        fee_payment_pct=_env_float("FEE_PAYMENT_PCT", 0.0),
+        fee_payment_fixed=_env_float("FEE_PAYMENT_FIXED", 0.0),
+        fee_fvf_on_shipping=_env_bool("FEE_FVF_ON_SHIPPING", True),
+        fee_fvf_on_tax=_env_bool("FEE_FVF_ON_TAX", True),
     )

@@ -211,6 +211,45 @@ def stats(
                        f"{_slope_text(snapshot.trend_slope_90d)}")
 
 
+@app.command("net")
+def net_command(
+    sale_price: Annotated[float, typer.Argument(help="Sale price to evaluate")],
+    shipping_charged: Annotated[
+        float, typer.Option("--shipping-charged", help="Shipping the buyer pays me")
+    ] = 0.0,
+    tax: Annotated[
+        float, typer.Option("--tax", help="Sales tax eBay collects from the buyer")
+    ] = 0.0,
+    shipping_cost: Annotated[
+        float, typer.Option("--shipping-cost", help="What it costs me to ship")
+    ] = 0.0,
+    promoted: Annotated[
+        float, typer.Option("--promoted", help="Promoted listing percent for this sale")
+    ] = None,
+) -> None:
+    """Net proceeds after eBay fees, with the full breakdown."""
+    from cardtracker.fees import FeeModel, compute_net
+
+    settings = load_settings()
+    model = FeeModel.from_settings(settings)
+    breakdown = compute_net(model, sale_price, shipping_charged=shipping_charged,
+                            tax_collected=tax, shipping_cost=shipping_cost,
+                            promoted_pct=promoted)
+    typer.echo(f"Sale price            {sale_price:>10,.2f}")
+    if shipping_charged:
+        typer.echo(f"Shipping charged      {shipping_charged:>10,.2f}")
+    if tax:
+        typer.echo(f"Sales tax (eBay keeps){tax:>10,.2f}  [fees apply to it, "
+                   "seller never receives it]")
+    typer.echo(f"Gross to seller       {breakdown.gross_to_seller:>10,.2f}")
+    for line in breakdown.lines:
+        typer.echo(f"  - {line.label:<40} {line.amount:>8,.2f}")
+    if shipping_cost:
+        typer.echo(f"  - shipping cost{'':<27} {shipping_cost:>8,.2f}")
+    typer.echo(f"Total fees            {breakdown.total_fees:>10,.2f}")
+    typer.secho(f"Net proceeds          {breakdown.net:>10,.2f}", fg="green", bold=True)
+
+
 @app.command("log-buy")
 def log_buy_command(
     card_id: Annotated[int, typer.Argument(help="Card id that was bought")],
