@@ -1,0 +1,3 @@
+# Streamlit Community Cloud installs from this file. It installs cardtracker
+# itself in editable mode, which pulls in every dependency from pyproject.toml.
+-e .

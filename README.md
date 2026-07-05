@@ -32,6 +32,36 @@ Five views in the sidebar:
 Browsing the dashboard never logs predictions; only the predict CLI writes
 to the predictions table.
 
+## Deploying the dashboard to Streamlit Community Cloud
+
+The dashboard can be hosted for free at share.streamlit.io so it is reachable
+from a browser without installing anything locally. Two things to know
+before doing this:
+
+- The dashboard is a viewer. Adding cards, logging buys and sells,
+  importing CSVs, and pulling comps still happen through the CLI on your
+  own machine. A hosted viewer shows whatever is in the database at deploy
+  time; it does not let a visitor add data through the browser.
+- Streamlit Community Cloud's free tier has ephemeral storage. The SQLite
+  file is wiped on redeploys and when the app sleeps and wakes from
+  inactivity. Treat a hosted instance as a snapshot for sharing or
+  demoing, not as the system of record for your collection. Keep using the
+  CLI locally for real tracking.
+
+Steps:
+
+1. Push this repository to GitHub (already done if you are reading this
+   from github.com/tymedina100/card-tracker).
+2. At share.streamlit.io, create a new app from that repository.
+3. Set the main file path to `src/cardtracker/dashboard.py`.
+4. Leave eBay keys unset unless you want live Browse API pulls to work in
+   the hosted app; CSV-imported data and everything else works without
+   them. To set them, use the app's Secrets manager in Streamlit Cloud
+   settings (same variable names as `.env.example`), not a committed
+   `.env` file.
+5. Deploy. The app installs from `requirements.txt`, which installs this
+   package in editable mode and pulls in every dependency.
+
 ## Setup
 
 ```powershell
