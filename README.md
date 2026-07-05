@@ -5,9 +5,12 @@ Runs entirely on your machine: SQLite database, no paid infrastructure.
 
 ## Status
 
-Phase 2 plus feature 1. Cards, comp ingestion (Browse API asks, CSV solds),
-rolling market stats with scheduled refresh, an explainable comparable-cohort
-prediction engine with backtesting, and buy logging with total cost basis.
+All core features complete. Cards, comp ingestion (Browse API asks, CSV
+solds), rolling market stats with scheduled refresh, an explainable
+comparable-cohort prediction engine with backtesting, and the full money
+toolkit: cost basis, net-after-fees calculator, unrealized and realized
+P&L, deal analyzer with max buy price, inventory status, and price targets.
+Remaining: the Streamlit dashboard.
 
 ## Setup
 
@@ -50,7 +53,35 @@ cardtracker backtest --horizon-days 30 --step-days 7
 cardtracker score-predictions
 cardtracker log-buy 1 --price 380 --shipping 12.50 --taxes 31.35 --date 2026-05-02
 cardtracker cost-basis
+cardtracker net 450 --shipping-charged 5 --tax 30 --shipping-cost 6 --promoted 2
+cardtracker unrealized --shipping-cost 5
+cardtracker log-sell 1 --price 470 --estimate-fees --shipping-cost 5
+cardtracker realized
+cardtracker max-buy 1 --target-roi 30
+cardtracker deals --target-roi 30 --days 14
+cardtracker set-status 1 --status listed --listed-price 475
+cardtracker inventory --status listed
+cardtracker set-targets 1 --target 500 --min 440
+cardtracker targets
 ```
+
+## Money features
+
+- net: itemized net proceeds after the fee model (final value fee on the
+  full buyer payment including shipping and tax, per-order fee, optional
+  promoted and processing). Sales tax raises fees but never reaches the
+  seller.
+- unrealized: per held card, market stat (30 day sold median, ask median
+  flagged as fallback) minus fees minus cost basis, with ROI and totals.
+- log-sell / realized: actual sale price and fees against average buy cost
+  per copy, realized P&L across all sales.
+- max-buy / deals: work backward from market through fees to the most you
+  can pay and still hit a target ROI or profit; recent asks below that
+  price are flagged as deals.
+- set-status / inventory: owned, listed, sold, or watching with quantity,
+  cost, listed price, and market side by side.
+- set-targets / targets: target sell and min accept prices judged against
+  the market with a per-card verdict.
 
 ## Cost basis
 
