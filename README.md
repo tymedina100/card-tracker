@@ -17,20 +17,32 @@ max buy price, inventory status, price targets), and a Streamlit dashboard.
 cardtracker dashboard
 ```
 
-Five views in the sidebar:
+The dashboard is fully interactive: every feature works through forms and
+buttons, no CLI required. Eight views in the sidebar:
+
 - Portfolio: total cost basis, market value of holdings, unrealized P&L
   (net of fees), realized P&L, plus holdings and sales tables.
-- Card: price history chart (ask vs sold, with 30 day median lines), the
-  full stat line, the live prediction with its rationale, and the position
-  (status, cost, profit if sold now, targets).
+- Cards: every card with comp counts and status, plus the add-card form.
+- Card detail: price history chart (ask vs sold, with 30 day median
+  lines), the full stat line, the live prediction with its rationale, the
+  position summary, and action tabs to log a buy, log a sell (with
+  optional fee estimation), set status/quantity/listed price and targets,
+  and pull active eBay asks.
 - Movers: every card's prediction at a chosen horizon, up and down columns
   sorted by confidence, rationale in each row.
 - Deals: active asks under the max buy price for a target ROI, with links.
+- Calculators: the net-after-fees breakdown and the max buy price
+  calculator, both live as you type.
+- Data: drag-and-drop CSV import for sold comps (stats auto-refresh),
+  refresh-all-stats and score-predictions buttons, and the CSV format
+  reference.
 - Accuracy: backtest hit rate, per-direction accuracy, and the cumulative
   hit rate over time.
 
-Browsing the dashboard never logs predictions; only the predict CLI writes
-to the predictions table.
+Browsing never writes: predictions shown on pages are not logged unless
+you click the log button, and viewing a card does not create rows. The
+CLI still exists and does everything the dashboard does, for scripting
+and scheduled refreshes.
 
 ## Deploying the dashboard to Streamlit Community Cloud
 
@@ -38,15 +50,17 @@ The dashboard can be hosted for free at share.streamlit.io so it is reachable
 from a browser without installing anything locally. Two things to know
 before doing this:
 
-- The dashboard is a viewer. Adding cards, logging buys and sells,
-  importing CSVs, and pulling comps still happen through the CLI on your
-  own machine. A hosted viewer shows whatever is in the database at deploy
-  time; it does not let a visitor add data through the browser.
-- Streamlit Community Cloud's free tier has ephemeral storage. The SQLite
-  file is wiped on redeploys and when the app sleeps and wakes from
-  inactivity. Treat a hosted instance as a snapshot for sharing or
-  demoing, not as the system of record for your collection. Keep using the
-  CLI locally for real tracking.
+- The hosted dashboard is fully usable in the browser: visitors can add
+  cards, log buys and sells, import CSVs, and run every calculator.
+- However, Streamlit Community Cloud's free tier has ephemeral storage.
+  The SQLite file is wiped on redeploys and when the app sleeps and wakes
+  from inactivity, so anything entered on the hosted site will eventually
+  disappear. Treat a hosted instance as a demo or sandbox, and keep the
+  real collection in a local install where the database is a durable file
+  on disk.
+- Everyone visiting the hosted URL shares one database. There are no
+  accounts; two people tracking different collections should each run
+  their own copy instead.
 
 Steps:
 

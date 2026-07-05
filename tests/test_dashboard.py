@@ -1,4 +1,8 @@
-"""Dashboard smoke tests using Streamlit's AppTest harness. No browser needed."""
+"""Dashboard tests using Streamlit's AppTest harness. No browser needed.
+
+Covers every view rendering with data and empty, plus the interactive forms:
+add card, log buy, log sell, status and targets, and the maintenance buttons.
+"""
 
 from datetime import date, timedelta
 from pathlib import Path
@@ -13,6 +17,9 @@ from cardtracker.portfolio import log_buy, set_targets
 from cardtracker.stats import refresh_snapshots
 
 DASHBOARD = str(Path(__file__).resolve().parents[1] / "src" / "cardtracker" / "dashboard.py")
+
+ALL_VIEWS = ("Portfolio", "Cards", "Card detail", "Movers", "Deals",
+             "Calculators", "Data", "Accuracy")
 
 
 @pytest.fixture(autouse=True)
@@ -67,43 +74,136 @@ def run_view(view: str) -> AppTest:
     return at
 
 
-def test_portfolio_view(seeded_db):
-    at = run_view("Portfolio")
-    labels = [metric.label for metric in at.metric]
-    assert "Total cost basis" in labels
-    assert "Realized P&L" in labels
+def submit(at: AppTest, label: str) -> AppTest:
+    """Click the button or form submit button with the given label."""
+    buttons = [b for b in at.button if b.label == label]
+    assert buttons, f"no button labeled '{label}'"
+    buttons[0].click()
+    at.run()
+    assert not at.exception, f"submit '{label}' raised: {at.exception}"
+    return at
 
 
-def test_card_view(seeded_db):
-    at = run_view("Card")
-    assert at.selectbox[0].value is not None
-    headers = " ".join(h.value for h in at.subheader)
-    assert "Price history" in headers
-    assert "Prediction" in headers
+def success_text(at: AppTest) -> str:
+    return " ".join(s.value for s in at.success)
 
 
-def test_movers_view(seeded_db):
-    at = run_view("Movers")
-    headers = " ".join(h.value for h in at.subheader)
-    assert "Predicted up" in headers
-    assert "Predicted down" in headers
+class TestViewsRender:
+    def test_portfolio_view(self, seeded_db):
+        at = run_view("Portfolio")
+        labels = [metric.label for metric in at.metric]
+        assert "Total cost basis" in labels
+        assert "Realized P&L" in labels
+
+    def test_card_detail_view(self, seeded_db):
+        at = run_view("Card detail")
+        assert at.selectbox[0].value is not None
+        headers = " ".join(h.value for h in at.subheader)
+        assert "Price history" in headers
+        assert "Prediction" in headers
+        assert "Actions" in headers
+
+    def test_movers_view(self, seeded_db):
+        at = run_view("Movers")
+        assert not at.exception
+
+    def test_deals_view(self, seeded_db):
+        at = run_view("Deals")
+        at.slider[0].set_value(5).run()
+        assert not at.exception
+        assert len(at.dataframe) == 1
+
+    def test_accuracy_view(self, seeded_db):
+        at = run_view("Accuracy")
+        labels = [metric.label for metric in at.metric]
+        assert "Hit rate" in labels
+
+    def test_empty_database_renders_everywhere(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DB_PATH", str(tmp_path / "empty.db"))
+        for view in ALL_VIEWS:
+            run_view(view)
 
 
-def test_deals_view(seeded_db):
-    at = run_view("Deals")
-    # the 250 ask sits under max buy for the rising sold median at 5 percent ROI
-    at.slider[0].set_value(5).run()
-    assert not at.exception
-    assert len(at.dataframe) == 1
+class TestForms:
+    def test_add_card_form(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DB_PATH", str(tmp_path / "forms.db"))
+        at = run_view("Cards")
+        at.text_input(key="add_player").set_value("Pikachu")
+        at.text_input(key="add_set").set_value("Jungle")
+        at.number_input(key="add_year").set_value(1999)
+        submit(at, "Add card")
+        assert "Added card" in success_text(at)
+        # the new card shows up in the table on rerender
+        at2 = run_view("Cards")
+        assert len(at2.dataframe) == 1
+
+    def test_add_card_requires_player_and_set(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DB_PATH", str(tmp_path / "forms.db"))
+        at = run_view("Cards")
+        submit(at, "Add card")
+        assert any("required" in e.value for e in at.error)
+
+    def test_log_buy_form(self, seeded_db):
+        at = run_view("Card detail")
+        at.number_input(key="buy_price").set_value(250.0)
+        at.number_input(key="buy_taxes").set_value(20.0)
+        submit(at, "Log buy")
+        assert "total cost of $270.00" in success_text(at)
+
+    def test_log_sell_form_reports_profit(self, seeded_db):
+        at = run_view("Card detail")
+        at.number_input(key="sell_price").set_value(400.0)
+        submit(at, "Log sell")
+        text = success_text(at)
+        assert "Logged sell" in text
+        assert "Realized profit" in text
+
+    def test_status_and_targets_form(self, seeded_db):
+        at = run_view("Card detail")
+        at.selectbox(key="status_value").set_value("listed")
+        at.number_input(key="status_listed").set_value(399.0)
+        at.number_input(key="target_price").set_value(420.0)
+        at.number_input(key="min_price").set_value(380.0)
+        submit(at, "Save")
+        assert "saved" in success_text(at).lower()
+
+    def test_targets_min_above_target_rejected(self, seeded_db):
+        at = run_view("Card detail")
+        at.number_input(key="target_price").set_value(300.0)
+        at.number_input(key="min_price").set_value(350.0)
+        submit(at, "Save")
+        assert any("above" in e.value for e in at.error)
+
+    def test_pull_comps_without_credentials_warns(self, seeded_db, monkeypatch):
+        monkeypatch.delenv("EBAY_CLIENT_ID", raising=False)
+        monkeypatch.delenv("EBAY_CLIENT_SECRET", raising=False)
+        at = run_view("Card detail")
+        submit(at, "Pull active listings")
+        assert any("EBAY_CLIENT_ID" in w.value for w in at.warning)
+
+    def test_refresh_and_score_buttons(self, seeded_db):
+        at = run_view("Data")
+        submit(at, "🔄 Refresh now")
+        assert "snapshot" in success_text(at)
+        at = run_view("Data")
+        submit(at, "✅ Score now")
+        assert "Scored" in success_text(at)
+
+    def test_log_prediction_button(self, seeded_db):
+        at = run_view("Card detail")
+        submit(at, "📌 Log this prediction for scoring")
+        assert "Prediction logged" in success_text(at)
 
 
-def test_accuracy_view(seeded_db):
-    at = run_view("Accuracy")
-    labels = [metric.label for metric in at.metric]
-    assert "Hit rate" in labels
+class TestCalculators:
+    def test_net_calculator(self, seeded_db):
+        at = run_view("Calculators")
+        at.number_input(key="net_price").set_value(450.0)
+        at.run()
+        labels = [metric.label for metric in at.metric]
+        assert "Net proceeds" in labels
 
-
-def test_empty_database_renders_everywhere(tmp_path, monkeypatch):
-    monkeypatch.setenv("DB_PATH", str(tmp_path / "empty.db"))
-    for view in ("Portfolio", "Card", "Movers", "Deals", "Accuracy"):
-        run_view(view)
+    def test_max_buy_calculator(self, seeded_db):
+        at = run_view("Calculators")
+        labels = [metric.label for metric in at.metric]
+        assert any("Max buy price" in label for label in labels)
