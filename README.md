@@ -5,12 +5,32 @@ Runs entirely on your machine: SQLite database, no paid infrastructure.
 
 ## Status
 
-All core features complete. Cards, comp ingestion (Browse API asks, CSV
-solds), rolling market stats with scheduled refresh, an explainable
-comparable-cohort prediction engine with backtesting, and the full money
-toolkit: cost basis, net-after-fees calculator, unrealized and realized
-P&L, deal analyzer with max buy price, inventory status, and price targets.
-Remaining: the Streamlit dashboard.
+Complete. Cards, comp ingestion (Browse API asks, CSV solds), rolling
+market stats with scheduled refresh, an explainable comparable-cohort
+prediction engine with backtesting, the full money toolkit (cost basis,
+net-after-fees calculator, unrealized and realized P&L, deal analyzer with
+max buy price, inventory status, price targets), and a Streamlit dashboard.
+
+## Dashboard
+
+```powershell
+cardtracker dashboard
+```
+
+Five views in the sidebar:
+- Portfolio: total cost basis, market value of holdings, unrealized P&L
+  (net of fees), realized P&L, plus holdings and sales tables.
+- Card: price history chart (ask vs sold, with 30 day median lines), the
+  full stat line, the live prediction with its rationale, and the position
+  (status, cost, profit if sold now, targets).
+- Movers: every card's prediction at a chosen horizon, up and down columns
+  sorted by confidence, rationale in each row.
+- Deals: active asks under the max buy price for a target ROI, with links.
+- Accuracy: backtest hit rate, per-direction accuracy, and the cumulative
+  hit rate over time.
+
+Browsing the dashboard never logs predictions; only the predict CLI writes
+to the predictions table.
 
 ## Setup
 

@@ -786,6 +786,18 @@ def score_predictions_command() -> None:
     typer.secho(f"Scored {scored} prediction(s)", fg="green")
 
 
+@app.command("dashboard")
+def dashboard_command() -> None:
+    """Launch the Streamlit dashboard in the browser."""
+    import subprocess
+    import sys
+
+    dashboard_path = Path(__file__).with_name("dashboard.py")
+    raise typer.Exit(subprocess.call([
+        sys.executable, "-m", "streamlit", "run", str(dashboard_path),
+    ]))
+
+
 @app.command("schedule-refresh")
 def schedule_refresh(
     interval_hours: Annotated[
