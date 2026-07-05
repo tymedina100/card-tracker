@@ -470,6 +470,167 @@ def unrealized_command(
             typer.echo("Cards showing 'no data' need comps and a refresh-stats run.")
 
 
+@app.command("set-status")
+def set_status_command(
+    card_id: Annotated[int, typer.Argument(help="Card id to update")],
+    status: Annotated[
+        str, typer.Option("--status", help="owned, listed, sold, or watching")
+    ] = None,
+    quantity: Annotated[int, typer.Option("--quantity", help="Copies held")] = None,
+    listed_price: Annotated[
+        float, typer.Option("--listed-price", help="Current listing price")
+    ] = None,
+) -> None:
+    """Set inventory status, quantity, or listed price for a card."""
+    from cardtracker.models import InventoryStatus
+    from cardtracker.portfolio import set_status
+
+    _, engine = _engine()
+    parsed_status = None
+    if status is not None:
+        try:
+            parsed_status = InventoryStatus(status.lower())
+        except ValueError:
+            typer.secho(f"--status must be owned, listed, sold, or watching, "
+                        f"got '{status}'", fg="red")
+            raise typer.Exit(code=1) from None
+    if parsed_status is None and quantity is None and listed_price is None:
+        typer.secho("Nothing to update. Pass --status, --quantity, or --listed-price.",
+                    fg="red")
+        raise typer.Exit(code=1)
+    with get_session(engine) as session:
+        card = _get_card_or_exit(session, card_id)
+        inventory = set_status(session, card_id, status=parsed_status,
+                               quantity=quantity, listed_price=listed_price)
+        listed = (f", listed at {inventory.listed_price:,.2f}"
+                  if inventory.listed_price else "")
+        typer.secho(f"Card {card_id} ({_describe(card)}): {inventory.status}, "
+                    f"quantity {inventory.quantity}{listed}", fg="green")
+
+
+@app.command("inventory")
+def inventory_command(
+    status: Annotated[
+        str, typer.Option("--status", help="Filter: owned, listed, sold, or watching")
+    ] = None,
+) -> None:
+    """Inventory with status, quantity, and current market stat."""
+    from cardtracker.models import InventoryStatus
+    from cardtracker.portfolio import inventory_view
+
+    _, engine = _engine()
+    parsed_status = None
+    if status is not None:
+        try:
+            parsed_status = InventoryStatus(status.lower())
+        except ValueError:
+            typer.secho(f"--status must be owned, listed, sold, or watching, "
+                        f"got '{status}'", fg="red")
+            raise typer.Exit(code=1) from None
+    with get_session(engine) as session:
+        lines = inventory_view(session, status=parsed_status)
+        if not lines:
+            typer.echo("No inventory rows match. Track a card with "
+                       "'cardtracker set-status' or 'cardtracker log-buy'.")
+            return
+        header = (f"{'id':>4}  {'card':<52}  {'status':<8}  {'qty':>3}  "
+                  f"{'cost':>10}  {'listed':>9}  {'market':>10}")
+        typer.echo(header)
+        typer.echo("-" * len(header))
+        for line in lines:
+            cost = f"{line.inventory.cost_basis:,.2f}" if line.inventory.cost_basis else ""
+            listed = f"{line.inventory.listed_price:,.2f}" if line.inventory.listed_price else ""
+            if line.market_per_copy is not None:
+                flag = "*" if line.market_price_type == "ask" else ""
+                market = f"{line.market_per_copy:,.2f}{flag}"
+            else:
+                market = "no data"
+            typer.echo(f"{line.card.id:>4}  {_describe(line.card):<52}  "
+                       f"{line.inventory.status:<8}  {line.inventory.quantity:>3}  "
+                       f"{cost:>10}  {listed:>9}  {market:>10}")
+        if any(line.market_price_type == "ask" for line in lines):
+            typer.secho("* market stat from ask median, no sold data", fg="yellow")
+
+
+@app.command("set-targets")
+def set_targets_command(
+    card_id: Annotated[int, typer.Argument(help="Card id to update")],
+    target: Annotated[
+        float, typer.Option("--target", help="Target sell price")
+    ] = None,
+    min_accept: Annotated[
+        float, typer.Option("--min", help="Minimum acceptable price")
+    ] = None,
+) -> None:
+    """Set target sell price and minimum acceptable price for a card."""
+    from cardtracker.portfolio import set_targets
+
+    _, engine = _engine()
+    if target is None and min_accept is None:
+        typer.secho("Nothing to update. Pass --target or --min.", fg="red")
+        raise typer.Exit(code=1)
+    if target is not None and min_accept is not None and min_accept > target:
+        typer.secho(f"--min ({min_accept:,.2f}) is above --target ({target:,.2f})",
+                    fg="red")
+        raise typer.Exit(code=1)
+    with get_session(engine) as session:
+        card = _get_card_or_exit(session, card_id)
+        inventory = set_targets(session, card_id, target_sell_price=target,
+                                min_accept_price=min_accept)
+        target_text = (f"{inventory.target_sell_price:,.2f}"
+                       if inventory.target_sell_price else "unset")
+        min_text = (f"{inventory.min_accept_price:,.2f}"
+                    if inventory.min_accept_price else "unset")
+        typer.secho(f"Card {card_id} ({_describe(card)}): target {target_text}, "
+                    f"min accept {min_text}", fg="green")
+
+
+@app.command("targets")
+def targets_command() -> None:
+    """Compare each card's target and min accept prices with the market."""
+    from cardtracker.portfolio import inventory_view
+
+    _, engine = _engine()
+    with get_session(engine) as session:
+        lines = [line for line in inventory_view(session)
+                 if line.inventory.target_sell_price or line.inventory.min_accept_price]
+        if not lines:
+            typer.echo("No targets set. Use 'cardtracker set-targets'.")
+            return
+        header = (f"{'id':>4}  {'card':<52}  {'market':>10}  {'target':>9}  "
+                  f"{'min':>9}  {'verdict':<24}")
+        typer.echo(header)
+        typer.echo("-" * len(header))
+        for line in lines:
+            inv = line.inventory
+            target_text = f"{inv.target_sell_price:,.2f}" if inv.target_sell_price else ""
+            min_text = f"{inv.min_accept_price:,.2f}" if inv.min_accept_price else ""
+            if line.market_per_copy is None:
+                market_text, verdict, color = "no data", "needs comps + refresh", None
+            else:
+                flag = "*" if line.market_price_type == "ask" else ""
+                market_text = f"{line.market_per_copy:,.2f}{flag}"
+                if inv.target_sell_price:
+                    gap = (line.market_per_copy - inv.target_sell_price) \
+                        / inv.target_sell_price * 100
+                    if gap >= 0:
+                        verdict, color = f"market above target {gap:+.1f}%", "green"
+                    elif inv.min_accept_price and line.market_per_copy >= inv.min_accept_price:
+                        verdict, color = f"between min and target {gap:+.1f}%", "yellow"
+                    else:
+                        verdict, color = f"below target {gap:+.1f}%", "red"
+                else:
+                    ok = line.market_per_copy >= inv.min_accept_price
+                    verdict = "market above min" if ok else "market below min"
+                    color = "green" if ok else "red"
+            typer.secho(f"{line.card.id:>4}  {_describe(line.card):<52}  "
+                        f"{market_text:>10}  {target_text:>9}  {min_text:>9}  "
+                        f"{verdict:<24}", fg=color)
+        if any(line.market_price_type == "ask" and line.market_per_copy is not None
+               for line in lines):
+            typer.secho("* market stat from ask median, no sold data", fg="yellow")
+
+
 @app.command("max-buy")
 def max_buy_command(
     card_id: Annotated[int, typer.Argument(help="Card id to analyze")],

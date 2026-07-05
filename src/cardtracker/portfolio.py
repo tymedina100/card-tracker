@@ -235,6 +235,64 @@ def realized_summary(session: Session, card_id: int | None = None) -> list[Reali
     return lines
 
 
+def set_status(session: Session, card_id: int, status: InventoryStatus | None = None,
+               quantity: int | None = None, listed_price: float | None = None) -> Inventory:
+    """Update inventory status, quantity, or listed price for a card."""
+    inventory = get_or_create_inventory(session, card_id)
+    if status is not None:
+        inventory.status = status
+    if quantity is not None:
+        inventory.quantity = quantity
+    if listed_price is not None:
+        inventory.listed_price = listed_price
+    session.add(inventory)
+    session.commit()
+    session.refresh(inventory)
+    return inventory
+
+
+def set_targets(session: Session, card_id: int, target_sell_price: float | None = None,
+                min_accept_price: float | None = None) -> Inventory:
+    """Store target sell price and minimum acceptable price for a card."""
+    inventory = get_or_create_inventory(session, card_id)
+    if target_sell_price is not None:
+        inventory.target_sell_price = target_sell_price
+    if min_accept_price is not None:
+        inventory.min_accept_price = min_accept_price
+    session.add(inventory)
+    session.commit()
+    session.refresh(inventory)
+    return inventory
+
+
+@dataclass
+class InventoryLine:
+    inventory: Inventory
+    card: Card
+    market_per_copy: float | None
+    market_price_type: str | None
+
+
+def inventory_view(session: Session,
+                   status: InventoryStatus | None = None) -> list[InventoryLine]:
+    """All inventory rows, optionally filtered by status, with the current
+    market stat alongside so targets can be judged at a glance."""
+    query = select(Inventory).order_by(Inventory.card_id)
+    if status is not None:
+        query = query.where(Inventory.status == status)
+    rows = session.exec(query).all()
+    lines = []
+    for row in rows:
+        market = market_value(session, row.card_id)
+        lines.append(InventoryLine(
+            inventory=row,
+            card=session.get(Card, row.card_id),
+            market_per_copy=market[0] if market else None,
+            market_price_type=market[1] if market else None,
+        ))
+    return lines
+
+
 def cost_basis_summary(session: Session, card_id: int | None = None) -> list[CostBasisLine]:
     """Per-card cost basis built from buy transactions."""
     query = select(Transaction).where(Transaction.type == TransactionType.BUY)

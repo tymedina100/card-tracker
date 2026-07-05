@@ -182,6 +182,42 @@ def test_cost_basis_empty():
     assert "No buys logged yet" in result.output
 
 
+def test_inventory_and_targets_cli():
+    add_charizard()
+    result = runner.invoke(app, ["set-status", "1", "--status", "listed",
+                                 "--quantity", "1", "--listed-price", "475"])
+    assert result.exit_code == 0
+    assert "listed" in result.output
+
+    result = runner.invoke(app, ["set-targets", "1", "--target", "500", "--min", "440"])
+    assert result.exit_code == 0
+    assert "target 500.00" in result.output
+
+    result = runner.invoke(app, ["inventory", "--status", "listed"])
+    assert result.exit_code == 0
+    assert "Charizard" in result.output
+    assert "475.00" in result.output
+
+    result = runner.invoke(app, ["targets"])
+    assert result.exit_code == 0
+    assert "500.00" in result.output
+    assert "needs comps" in result.output
+
+
+def test_set_targets_min_above_target_rejected():
+    add_charizard()
+    result = runner.invoke(app, ["set-targets", "1", "--target", "400", "--min", "450"])
+    assert result.exit_code == 1
+    assert "above" in result.output
+
+
+def test_set_status_invalid_status():
+    add_charizard()
+    result = runner.invoke(app, ["set-status", "1", "--status", "vaulted"])
+    assert result.exit_code == 1
+    assert "owned, listed, sold, or watching" in result.output
+
+
 def test_backtest_without_data():
     result = runner.invoke(app, ["backtest"])
     assert result.exit_code == 0

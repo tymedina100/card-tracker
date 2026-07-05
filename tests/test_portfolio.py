@@ -172,6 +172,61 @@ class TestRealized:
         assert line.net == 50.0
 
 
+class TestInventoryAndTargets:
+    def test_set_status_and_quantity(self, session, sample_card):
+        from cardtracker.models import InventoryStatus
+        from cardtracker.portfolio import set_status
+
+        inventory = set_status(session, sample_card.id,
+                               status=InventoryStatus.WATCHING)
+        assert inventory.status == "watching"
+        inventory = set_status(session, sample_card.id,
+                               status=InventoryStatus.LISTED, quantity=3,
+                               listed_price=450.0)
+        assert inventory.status == "listed"
+        assert inventory.quantity == 3
+        assert inventory.listed_price == 450.0
+
+    def test_inventory_view_filters_by_status(self, session, sample_card):
+        from cardtracker.models import Card, Category, InventoryStatus
+        from cardtracker.portfolio import inventory_view, set_status
+
+        other = Card(category=Category.SPORTS, player_or_character="Luka Doncic",
+                     set_name="Prizm", year=2018)
+        session.add(other)
+        session.commit()
+        session.refresh(other)
+        set_status(session, sample_card.id, status=InventoryStatus.OWNED, quantity=1)
+        set_status(session, other.id, status=InventoryStatus.WATCHING)
+        listed_only = inventory_view(session, status=InventoryStatus.WATCHING)
+        assert [line.card.id for line in listed_only] == [other.id]
+        assert len(inventory_view(session)) == 2
+
+    def test_set_targets_persists(self, session, sample_card):
+        from cardtracker.portfolio import set_targets
+
+        inventory = set_targets(session, sample_card.id, target_sell_price=500.0,
+                                min_accept_price=440.0)
+        assert inventory.target_sell_price == 500.0
+        assert inventory.min_accept_price == 440.0
+        # partial update keeps the other value
+        inventory = set_targets(session, sample_card.id, min_accept_price=430.0)
+        assert inventory.target_sell_price == 500.0
+        assert inventory.min_accept_price == 430.0
+
+    def test_inventory_view_includes_market(self, session, sample_card):
+        from cardtracker.models import PriceSnapshot, PriceType
+        from cardtracker.portfolio import inventory_view, set_targets
+
+        set_targets(session, sample_card.id, target_sell_price=500.0)
+        session.add(PriceSnapshot(card_id=sample_card.id, as_of_date=date(2026, 7, 4),
+                                  price_type=PriceType.SOLD, median_30d=480.0))
+        session.commit()
+        line = inventory_view(session)[0]
+        assert line.market_per_copy == 480.0
+        assert line.market_price_type == "sold"
+
+
 def test_migration_adds_new_columns(tmp_path):
     import sqlite3
 
