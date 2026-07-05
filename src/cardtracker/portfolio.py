@@ -10,7 +10,20 @@ from datetime import date
 
 from sqlmodel import Session, select
 
+from cardtracker.fees import FeeModel, compute_net
 from cardtracker.models import Card, Inventory, InventoryStatus, Transaction, TransactionType
+from cardtracker.stats import latest_snapshots
+
+
+def market_value(session: Session, card_id: int) -> tuple[float, str, date] | None:
+    """Current market stat for a card: latest 30 day sold median, falling back
+    to the ask median flagged as such. (value, 'sold'|'ask', as_of) or None."""
+    snapshots = latest_snapshots(session, card_id)
+    for price_type in ("sold", "ask"):
+        snapshot = snapshots.get(price_type)
+        if snapshot is not None and snapshot.median_30d:
+            return snapshot.median_30d, price_type, snapshot.as_of_date
+    return None
 
 
 @dataclass
@@ -73,6 +86,64 @@ def log_buy(session: Session, card_id: int, price: float, buy_date: date | None 
     session.commit()
     session.refresh(transaction)
     return transaction
+
+
+@dataclass
+class UnrealizedLine:
+    """Profit and ROI if one card's owned copies were sold at market now."""
+
+    card: Card
+    quantity: int
+    cost_basis: float
+    market_per_copy: float | None
+    market_price_type: str | None
+    market_as_of: date | None
+    net_per_copy: float | None
+
+    @property
+    def net_value(self) -> float | None:
+        return self.net_per_copy * self.quantity if self.net_per_copy is not None else None
+
+    @property
+    def profit(self) -> float | None:
+        return self.net_value - self.cost_basis if self.net_value is not None else None
+
+    @property
+    def roi_pct(self) -> float | None:
+        if self.profit is None or not self.cost_basis:
+            return None
+        return self.profit / self.cost_basis * 100
+
+
+def unrealized_summary(session: Session, fee_model: FeeModel,
+                       shipping_cost: float = 0.0) -> list[UnrealizedLine]:
+    """Profit if sold now for every held card (owned or listed, quantity > 0):
+    market stat minus fees minus cost basis. Cards without snapshots get a line
+    with no market value so they are visible rather than silently dropped."""
+    holdings = session.exec(
+        select(Inventory)
+        .where(Inventory.quantity > 0)
+        .where(Inventory.status.in_((InventoryStatus.OWNED, InventoryStatus.LISTED)))
+        .order_by(Inventory.card_id)
+    ).all()
+    lines = []
+    for holding in holdings:
+        market = market_value(session, holding.card_id)
+        if market is not None:
+            value, price_type, as_of = market
+            net = compute_net(fee_model, value, shipping_cost=shipping_cost).net
+        else:
+            value, price_type, as_of, net = None, None, None, None
+        lines.append(UnrealizedLine(
+            card=session.get(Card, holding.card_id),
+            quantity=holding.quantity,
+            cost_basis=holding.cost_basis or 0.0,
+            market_per_copy=value,
+            market_price_type=price_type,
+            market_as_of=as_of,
+            net_per_copy=net,
+        ))
+    return lines
 
 
 def cost_basis_summary(session: Session, card_id: int | None = None) -> list[CostBasisLine]:

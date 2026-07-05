@@ -56,6 +56,73 @@ def test_cost_basis_filter_by_card(session, sample_card):
     assert lines[0].total_cost == 50.0
 
 
+class TestUnrealized:
+    def _snapshot(self, session, card_id, median, price_type="sold"):
+        from cardtracker.models import PriceSnapshot, PriceType
+
+        session.add(PriceSnapshot(card_id=card_id, as_of_date=date(2026, 7, 4),
+                                  price_type=PriceType(price_type), median_30d=median))
+        session.commit()
+
+    def test_profit_and_roi_from_sold_median(self, session, sample_card):
+        from cardtracker.fees import FeeModel
+        from cardtracker.portfolio import unrealized_summary
+
+        log_buy(session, sample_card.id, price=300.0)
+        self._snapshot(session, sample_card.id, 400.0)
+        model = FeeModel(final_value_pct=10.0, per_order_fee=0.0)
+        lines = unrealized_summary(session, model)
+        assert len(lines) == 1
+        line = lines[0]
+        assert line.market_per_copy == 400.0
+        assert line.market_price_type == "sold"
+        assert line.net_per_copy == 360.0
+        assert line.profit == 60.0
+        assert line.roi_pct == 20.0
+
+    def test_ask_fallback_flagged(self, session, sample_card):
+        from cardtracker.fees import FeeModel
+        from cardtracker.portfolio import unrealized_summary
+
+        log_buy(session, sample_card.id, price=300.0)
+        self._snapshot(session, sample_card.id, 500.0, price_type="ask")
+        lines = unrealized_summary(session, FeeModel(final_value_pct=0, per_order_fee=0))
+        assert lines[0].market_price_type == "ask"
+        assert lines[0].market_per_copy == 500.0
+
+    def test_sold_preferred_over_ask(self, session, sample_card):
+        from cardtracker.fees import FeeModel
+        from cardtracker.portfolio import unrealized_summary
+
+        log_buy(session, sample_card.id, price=300.0)
+        self._snapshot(session, sample_card.id, 400.0, price_type="sold")
+        self._snapshot(session, sample_card.id, 500.0, price_type="ask")
+        lines = unrealized_summary(session, FeeModel())
+        assert lines[0].market_price_type == "sold"
+
+    def test_card_without_snapshot_visible_with_no_market(self, session, sample_card):
+        from cardtracker.fees import FeeModel
+        from cardtracker.portfolio import unrealized_summary
+
+        log_buy(session, sample_card.id, price=300.0)
+        lines = unrealized_summary(session, FeeModel())
+        assert lines[0].market_per_copy is None
+        assert lines[0].profit is None
+
+    def test_quantity_multiplies_value(self, session, sample_card):
+        from cardtracker.fees import FeeModel
+        from cardtracker.portfolio import unrealized_summary
+
+        log_buy(session, sample_card.id, price=100.0)
+        log_buy(session, sample_card.id, price=120.0)
+        self._snapshot(session, sample_card.id, 200.0)
+        model = FeeModel(final_value_pct=0.0, per_order_fee=0.0)
+        line = unrealized_summary(session, model)[0]
+        assert line.quantity == 2
+        assert line.net_value == 400.0
+        assert line.profit == 180.0
+
+
 def test_migration_adds_new_columns(tmp_path):
     import sqlite3
 

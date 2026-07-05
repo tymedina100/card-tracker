@@ -325,6 +325,58 @@ def cost_basis_command(
                         bold=True)
 
 
+@app.command("unrealized")
+def unrealized_command(
+    shipping_cost: Annotated[
+        float, typer.Option("--shipping-cost", help="Assumed cost to ship a sale")
+    ] = 0.0,
+) -> None:
+    """Profit and ROI if each held card were sold at market right now."""
+    from cardtracker.fees import FeeModel
+    from cardtracker.portfolio import unrealized_summary
+
+    settings, engine = _engine()
+    with get_session(engine) as session:
+        lines = unrealized_summary(session, FeeModel.from_settings(settings),
+                                   shipping_cost=shipping_cost)
+        if not lines:
+            typer.echo("No held cards. Log a buy first with 'cardtracker log-buy'.")
+            return
+        header = (f"{'id':>4}  {'card':<52}  {'qty':>3}  {'cost':>10}  {'market':>10}  "
+                  f"{'net value':>10}  {'profit':>10}  {'roi':>8}")
+        typer.echo(header)
+        typer.echo("-" * len(header))
+        flagged = False
+        for line in lines:
+            if line.market_per_copy is None:
+                typer.echo(f"{line.card.id:>4}  {_describe(line.card):<52}  "
+                           f"{line.quantity:>3}  {line.cost_basis:>10,.2f}  "
+                           f"{'no data':>10}  {'':>10}  {'':>10}  {'':>8}")
+                continue
+            flag = " *" if line.market_price_type == "ask" else ""
+            if flag:
+                flagged = True
+            roi = f"{line.roi_pct:+.1f}%" if line.roi_pct is not None else "n/a"
+            typer.echo(
+                f"{line.card.id:>4}  {_describe(line.card):<52}  {line.quantity:>3}  "
+                f"{line.cost_basis:>10,.2f}  {line.market_per_copy:>8,.2f}{flag:<2}  "
+                f"{line.net_value:>10,.2f}  {line.profit:>+10,.2f}  {roi:>8}"
+            )
+        priced = [line for line in lines if line.profit is not None]
+        if priced:
+            total_cost = sum(line.cost_basis for line in priced)
+            total_profit = sum(line.profit for line in priced)
+            total_roi = f" ({total_profit / total_cost * 100:+.1f}%)" if total_cost else ""
+            typer.secho(f"Unrealized profit: {total_profit:+,.2f}{total_roi} "
+                        f"on cost basis {total_cost:,.2f}", bold=True)
+        if flagged:
+            typer.secho("* based on ask median, no sold data for this card",
+                        fg="yellow")
+        stale = [line for line in lines if line.market_per_copy is None]
+        if stale:
+            typer.echo("Cards showing 'no data' need comps and a refresh-stats run.")
+
+
 @app.command("predict")
 def predict(
     card_id: Annotated[int, typer.Argument(help="Card id to predict")],
