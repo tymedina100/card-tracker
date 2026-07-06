@@ -226,7 +226,7 @@ class TestManageCard:
     def test_export_button_present(self, seeded_db):
         at = run_view("Data")
         headers = " ".join(h.value for h in at.subheader)
-        assert "Export my collection" in headers
+        assert "Backup" in headers
 
 
 class TestCalculators:
@@ -240,4 +240,4 @@ class TestCalculators:
     def test_max_buy_calculator(self, seeded_db):
         at = run_view("Calculators")
         labels = [metric.label for metric in at.metric]
-        assert any("Max buy price" in label for label in labels)
+        assert any("Max buy" in label for label in labels)

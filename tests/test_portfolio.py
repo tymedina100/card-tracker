@@ -292,3 +292,58 @@ def test_migration_adds_new_columns(tmp_path):
         assert row.price == 100.0
         assert row.taxes == 0.0
         assert row.grading_cost == 0.0
+
+
+def test_effective_market_value_prefers_manual(session, sample_card):
+    from cardtracker.models import Inventory
+    from cardtracker.portfolio import effective_market_value
+
+    inv = Inventory(card_id=sample_card.id, owner="", status="owned", quantity=1,
+                    manual_market_value=420.0, last_sold_price=390.0)
+    session.add(inv)
+    session.commit()
+    value, source = effective_market_value(session, inv)
+    assert value == 420.0
+    assert source == "manual"
+
+
+def test_effective_market_value_falls_back_to_last_sold(session, sample_card):
+    from cardtracker.models import Inventory
+    from cardtracker.portfolio import effective_market_value
+
+    inv = Inventory(card_id=sample_card.id, owner="", status="owned", quantity=1,
+                    last_sold_price=375.0)
+    session.add(inv)
+    session.commit()
+    value, source = effective_market_value(session, inv)
+    assert value == 375.0
+    assert source == "last sold"
+
+
+def test_assess_card_owned_recommendation_and_math(session, sample_card):
+    from cardtracker.flip import Recommendation
+    from cardtracker.portfolio import assess_card, log_buy, set_market_inputs
+
+    # Paid 300 total for one copy; market 400; target 20% ROI.
+    log_buy(session, sample_card.id, price=300.0, buy_date=date(2026, 5, 1))
+    set_market_inputs(session, sample_card.id, manual_market_value=400.0,
+                      target_roi_pct=20.0)
+    inv = session.exec(select(Inventory)).one()
+    a = assess_card(session, inv)
+    assert a.market_value == 400.0
+    assert a.net_if_sold is not None and a.net_if_sold > 0
+    # Net (~346.60) is above the 300 cost, so there is a real profit.
+    assert a.profit is not None and a.profit > 0
+    assert a.recommendation in {Recommendation.SELL_NOW, Recommendation.LIST,
+                                Recommendation.HOLD}
+
+
+def test_assess_card_missing_market_is_flagged(session, sample_card):
+    from cardtracker.flip import Recommendation
+    from cardtracker.portfolio import assess_card, log_buy
+
+    log_buy(session, sample_card.id, price=100.0, buy_date=date(2026, 5, 1))
+    inv = session.exec(select(Inventory)).one()
+    a = assess_card(session, inv)
+    assert a.missing_market
+    assert a.recommendation == Recommendation.MISSING_DATA

@@ -239,6 +239,61 @@ hr {{ border-color: {BORDER_SOFT}; }}
 }}
 .ct-feature-head {{ font-weight: 600; color: {TEXT}; margin-bottom: 0.35rem; }}
 .ct-feature-body {{ color: {MUTED}; font-size: 0.92rem; line-height: 1.5; }}
+
+/* ---- Badges & pills ----------------------------------------------------- */
+.ct-badge {{
+  display: inline-block; padding: 0.18rem 0.62rem; border-radius: 999px;
+  font-size: 0.76rem; font-weight: 600; letter-spacing: 0.02em;
+  border: 1px solid transparent; white-space: nowrap; line-height: 1.4;
+}}
+.ct-badge-green {{ background: rgba(62,203,122,0.14); color: {POS};
+  border-color: rgba(62,203,122,0.35); }}
+.ct-badge-red {{ background: rgba(229,96,90,0.14); color: {NEG};
+  border-color: rgba(229,96,90,0.35); }}
+.ct-badge-gold {{ background: rgba(211,168,76,0.16); color: {GOLD_SOFT};
+  border-color: rgba(211,168,76,0.4); }}
+.ct-badge-blue {{ background: rgba(90,140,220,0.14); color: #8fb4f0;
+  border-color: rgba(90,140,220,0.35); }}
+.ct-badge-gray {{ background: rgba(134,149,171,0.12); color: {MUTED};
+  border-color: rgba(134,149,171,0.3); }}
+
+/* ---- Action / decision cards ------------------------------------------- */
+.ct-action-card {{
+  border: 1px solid {BORDER}; border-radius: 14px; padding: 1rem 1.15rem;
+  background: linear-gradient(180deg, {SURFACE}, {INK}); height: 100%;
+}}
+.ct-action-count {{ font-family: 'Fraunces', serif; font-size: 2rem; font-weight: 600;
+  line-height: 1; color: {TEXT}; }}
+.ct-action-title {{ color: {MUTED}; font-size: 0.78rem; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase; margin-top: 0.35rem; }}
+.ct-action-sub {{ color: {MUTED}; font-size: 0.8rem; margin-top: 0.4rem; line-height: 1.4; }}
+.ct-action-card.is-alert {{ border-color: rgba(229,96,90,0.4); }}
+.ct-action-card.is-good {{ border-color: rgba(62,203,122,0.4); }}
+
+/* ---- Position summary --------------------------------------------------- */
+.ct-summary {{
+  border: 1px solid {BORDER}; border-radius: 16px; padding: 1.3rem 1.5rem;
+  background:
+    radial-gradient(600px 200px at 100% 0%, rgba(211,168,76,0.06), transparent 70%),
+    linear-gradient(180deg, {SURFACE}, {INK});
+  margin-bottom: 1.2rem;
+}}
+.ct-summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem 1.4rem; margin-bottom: 1rem; }}
+.ct-summary-item {{ display: flex; flex-direction: column; gap: 0.15rem; }}
+.ct-summary-label {{ color: {MUTED}; font-size: 0.72rem; font-weight: 600;
+  letter-spacing: 0.05em; text-transform: uppercase; }}
+.ct-summary-value {{ color: {TEXT}; font-size: 1.35rem; font-weight: 600;
+  font-feature-settings: "tnum"; }}
+.ct-summary-value.pos {{ color: {POS}; }}
+.ct-summary-value.neg {{ color: {NEG}; }}
+.ct-summary-verdict {{
+  display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
+  border-top: 1px solid {BORDER_SOFT}; padding-top: 1rem;
+}}
+.ct-summary-reason {{ color: {MUTED}; font-size: 0.92rem; line-height: 1.5; }}
+.ct-num-pos {{ color: {POS}; font-weight: 600; }}
+.ct-num-neg {{ color: {NEG}; font-weight: 600; }}
 </style>
 """
 
@@ -274,3 +329,62 @@ def sidebar_brand() -> None:
         '<div class="ct-nav-label">Navigation</div>',
         unsafe_allow_html=True,
     )
+
+
+# ---- Recommendation & status visuals ----------------------------------------
+# One place maps each recommendation/status to a badge colour and a coloured dot,
+# so tables (which can't render HTML) and cards (which can) stay in sync.
+
+_REC_STYLE = {
+    "Buy": ("ct-badge-green", "🟢"),
+    "Sell Now": ("ct-badge-green", "🟢"),
+    "List": ("ct-badge-gold", "🟡"),
+    "Hold": ("ct-badge-blue", "🔵"),
+    "Pass": ("ct-badge-red", "🔴"),
+    "Underwater": ("ct-badge-red", "🔴"),
+    "Missing Data": ("ct-badge-gray", "⚪"),
+    "Sold": ("ct-badge-gray", "⚫"),
+}
+
+_STATUS_STYLE = {
+    "owned": "ct-badge-blue",
+    "listed": "ct-badge-gold",
+    "watching": "ct-badge-gray",
+    "sold": "ct-badge-green",
+    "passed": "ct-badge-gray",
+}
+
+
+def badge(label: str, css_class: str = "ct-badge-gray") -> str:
+    """Return an inline HTML pill. Use inside st.markdown(unsafe_allow_html=True)."""
+    return f'<span class="ct-badge {css_class}">{label}</span>'
+
+
+def rec_badge(recommendation: str) -> str:
+    """HTML badge for a recommendation label (Buy, Hold, Sell Now, ...)."""
+    css_class, _ = _REC_STYLE.get(str(recommendation), ("ct-badge-gray", "⚪"))
+    return badge(str(recommendation), css_class)
+
+
+def rec_dot(recommendation: str) -> str:
+    """Coloured-dot + label text for a recommendation, for dataframe cells that
+    cannot render HTML."""
+    _, dot = _REC_STYLE.get(str(recommendation), ("ct-badge-gray", "⚪"))
+    return f"{dot} {recommendation}"
+
+
+def status_badge(status: str) -> str:
+    """HTML badge for an inventory status."""
+    return badge(str(status), _STATUS_STYLE.get(str(status), "ct-badge-gray"))
+
+
+def money_html(value: float | None, *, signed: bool = False,
+               color: bool = False) -> str:
+    """Format a dollar value as HTML, optionally signed and red/green coloured."""
+    if value is None:
+        return '<span class="ct-num-neg">n/a</span>' if color else "n/a"
+    text = f"${value:,.2f}" if not signed else f"{'+' if value >= 0 else '-'}${abs(value):,.2f}"
+    if not color:
+        return text
+    cls = "ct-num-pos" if value >= 0 else "ct-num-neg"
+    return f'<span class="{cls}">{text}</span>'

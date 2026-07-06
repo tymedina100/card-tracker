@@ -1,6 +1,5 @@
 """Cards list with add form, and the card detail page with all actions."""
 
-from collections import defaultdict
 from datetime import date
 
 import pandas as pd
@@ -9,6 +8,7 @@ import streamlit as st
 from sqlmodel import select
 
 from cardtracker.ebay_auth import MissingCredentialsError
+from cardtracker.flip import Recommendation
 from cardtracker.models import (
     Card,
     Category,
@@ -20,15 +20,16 @@ from cardtracker.models import (
     describe_card,
 )
 from cardtracker.portfolio import (
+    assess_card,
     avg_cost_per_copy,
     cost_basis_summary,
     delete_card,
     get_or_create_inventory,
     log_buy,
     log_sell,
+    set_market_inputs,
     set_status,
     set_targets,
-    unrealized_summary,
 )
 from cardtracker.predict import predict_card
 from cardtracker.reference import (
@@ -57,7 +58,7 @@ from cardtracker.webui.shared import (
     show_flash,
     style_chart,
 )
-from cardtracker.webui.theme import page_header
+from cardtracker.webui.theme import page_header, rec_badge, rec_dot
 
 
 def cards_page() -> None:
@@ -70,11 +71,6 @@ def cards_page() -> None:
         cards = session.exec(
             select(Card).where(Card.owner == owner).order_by(Card.id)
         ).all()
-        card_ids = [card.id for card in cards]
-        comp_rows = (session.exec(
-            select(Comp.card_id, Comp.price_type)
-            .where(Comp.card_id.in_(card_ids))
-        ).all() if card_ids else [])
         inventories = {
             inv.card_id: inv for inv in session.exec(
                 select(Inventory).where(Inventory.owner == owner)
@@ -84,9 +80,6 @@ def cards_page() -> None:
         used_sets = distinct_values(session, Card.set_name, owner)
         used_parallels = distinct_values(session, Card.variation_or_parallel, owner)
         used_grades = distinct_values(session, Card.grade, owner)
-    counts: dict[tuple[int, str], int] = defaultdict(int)
-    for card_id, price_type in comp_rows:
-        counts[(card_id, str(price_type))] += 1
 
     with st.expander("➕ Add a card", expanded=not cards):
         with st.form("add_card", clear_on_submit=True):
@@ -142,34 +135,64 @@ def cards_page() -> None:
                 "of the same card are two separate cards.")
         return
 
-    f1, f2 = st.columns(2)
-    set_filter = f1.selectbox("Filter by set", ["All sets", *used_sets],
-                              key="cards_filter_set")
-    player_filter = f2.selectbox("Filter by player or character",
-                                 ["All players", *used_players],
-                                 key="cards_filter_player")
-    visible = [
-        card for card in cards
-        if (set_filter == "All sets" or card.set_name == set_filter)
-        and (player_filter == "All players"
-             or card.player_or_character == player_filter)
-    ]
+    # Assess every card once (transient inventory for cards not yet held, so
+    # merely viewing the list never writes a row). Same engine the Portfolio uses.
+    with open_session() as session:
+        assessments = []
+        for card in cards:
+            inv = inventories.get(card.id) or Inventory(
+                card_id=card.id, owner=owner,
+                status=InventoryStatus.WATCHING, quantity=0)
+            assessments.append(assess_card(session, inv))
+
+    f1, f2, f3 = st.columns(3)
+    status_filter = f1.selectbox(
+        "Status", ["All", *[s.value for s in InventoryStatus]],
+        key="cards_filter_status")
+    category_filter = f2.selectbox(
+        "Category", ["All", *[c.value for c in Category]], key="cards_filter_cat")
+    rec_filter = f3.selectbox(
+        "Recommendation", ["All", *[r.value for r in Recommendation]],
+        key="cards_filter_rec")
+    f4, f5, f6 = st.columns([2, 1, 1])
+    search = f4.text_input("Search player or card", key="cards_search",
+                           placeholder="e.g. Charizard")
+    missing_only = f5.checkbox("Missing market only", key="cards_missing_only")
+    underwater_only = f6.checkbox("Underwater only", key="cards_underwater_only")
+
+    def _match(a) -> bool:
+        if status_filter != "All" and a.status != status_filter:
+            return False
+        if category_filter != "All" and str(a.card.category) != category_filter:
+            return False
+        if rec_filter != "All" and str(a.recommendation) != rec_filter:
+            return False
+        if missing_only and not a.missing_market:
+            return False
+        if underwater_only and not a.is_underwater:
+            return False
+        if search.strip() and search.strip().lower() not in describe_card(a.card).lower():
+            return False
+        return True
+
+    visible = [a for a in assessments if _match(a)]
     if not visible:
         st.caption("No cards match the current filters.")
         return
 
-    rows = []
-    for card in visible:
-        inventory = inventories.get(card.id)
-        rows.append({
-            "id": card.id,
-            "card": describe_card(card),
-            "category": str(card.category),
-            "status": str(inventory.status) if inventory else "",
-            "qty": inventory.quantity if inventory else 0,
-            "asks": counts[(card.id, "ask")],
-            "solds": counts[(card.id, "sold")],
-        })
+    rows = [{
+        "id": a.card.id,
+        "card": describe_card(a.card),
+        "category": str(a.card.category),
+        "status": a.status,
+        "qty": a.quantity,
+        "cost basis": round(a.cost_basis, 2) if a.cost_basis else None,
+        "market value": round(a.market_value, 2) if a.market_value is not None else None,
+        "net if sold": round(a.net_if_sold, 2) if a.net_if_sold is not None else None,
+        "profit": round(a.profit, 2) if a.profit is not None else None,
+        "roi %": round(a.roi_pct, 1) if a.roi_pct is not None else None,
+        "recommendation": rec_dot(a.recommendation),
+    } for a in visible]
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
     st.caption("Open the Card detail view to see charts, predictions, and "
                "to log buys and sells.")
@@ -212,6 +235,59 @@ def _price_history_chart(comps: list[Comp],
     return fig
 
 
+def _summary_item(label: str, value_html: str) -> str:
+    return (f'<div class="ct-summary-item"><span class="ct-summary-label">{label}'
+            f'</span><span class="ct-summary-value">{value_html}</span></div>')
+
+
+def _render_position_summary(a, inventory) -> None:
+    """The big decision box at the top of Card detail: paid, worth, net, and the
+    recommendation, all from the shared flip engine so it matches every other view."""
+    def pct(v):
+        if v is None:
+            return '<span class="ct-summary-value">n/a</span>'
+        cls = "pos" if v >= 0 else "neg"
+        return f'<span class="ct-summary-value {cls}">{v:+.1f}%</span>'
+
+    def signed(v):
+        if v is None:
+            return '<span class="ct-summary-value">n/a</span>'
+        cls = "pos" if v >= 0 else "neg"
+        return (f'<span class="ct-summary-value {cls}">'
+                f'{"+" if v >= 0 else "-"}${abs(v):,.2f}</span>')
+
+    market = (f"${a.market_value:,.2f}" if a.market_value is not None
+              else "not set")
+    source = f" · {a.market_source}" if a.market_source else ""
+    items = [
+        _summary_item("You paid (cost basis)",
+                      f"${a.cost_basis:,.2f}" if a.cost_basis else "$0.00"),
+        _summary_item(f"Market value{source}", market),
+        _summary_item("Net if sold today",
+                      f"${a.net_if_sold:,.2f}" if a.net_if_sold is not None else "n/a"),
+        f'<div class="ct-summary-item"><span class="ct-summary-label">Profit if sold '
+        f'today</span>{signed(a.profit)}</div>',
+        f'<div class="ct-summary-item"><span class="ct-summary-label">ROI if sold '
+        f'today</span>{pct(a.roi_pct)}</div>',
+        _summary_item("Target ROI", f"{a.target_roi_pct:.0f}%"),
+        _summary_item("Needed sale price",
+                      f"${a.needed_sale_price:,.2f}" if a.needed_sale_price is not None
+                      else "n/a"),
+        _summary_item("Min accept",
+                      f"${inventory.min_accept_price:,.2f}"
+                      if inventory.min_accept_price is not None else "not set"),
+    ]
+    html = (
+        '<div class="ct-summary">'
+        f'<div class="ct-summary-grid">{"".join(items)}</div>'
+        '<div class="ct-summary-verdict">'
+        f'{rec_badge(a.recommendation)}'
+        f'<span class="ct-summary-reason">{a.reason}</span>'
+        '</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
 def card_detail_page() -> None:
     show_flash()
     page_header("Card Detail",
@@ -231,11 +307,11 @@ def card_detail_page() -> None:
         ).all()
         prediction = predict_card(session, card.id, log=False)
         basis = cost_basis_summary(session, owner=owner, card_id=card.id)
-        holdings = [line for line in unrealized_summary(session, fee_model(),
-                                                        owner=owner)
-                    if line.card.id == card.id]
         # viewing must not write rows; a pending Inventory still renders defaults
         inventory = get_or_create_inventory(session, card.id, owner=owner)
+        assessment = assess_card(session, inventory)
+
+    _render_position_summary(assessment, inventory)
 
     st.subheader("Price history: ask vs sold")
     if comps:
@@ -279,8 +355,8 @@ def card_detail_page() -> None:
         with st.container(border=True):
             st.subheader("Position")
             per_copy = basis[0].cost_per_copy if basis else None
-            profit = holdings[0].profit if holdings else None
-            roi = holdings[0].roi_pct if holdings else None
+            profit = assessment.profit
+            roi = assessment.roi_pct
             rows = {
                 "status": str(inventory.status),
                 "quantity": inventory.quantity,
@@ -373,26 +449,71 @@ def card_detail_page() -> None:
         listed = c3.number_input("Listed price (0 = not listed)", 0.0,
                                  value=inventory.listed_price or 0.0, step=1.0,
                                  format="%.2f", key="status_listed")
-        c4, c5 = st.columns(2)
+        c4, c5, c6 = st.columns(3)
         target = c4.number_input("Target sell price (0 = unset)", 0.0,
                                  value=inventory.target_sell_price or 0.0,
                                  step=1.0, format="%.2f", key="target_price")
         min_accept = c5.number_input("Min accept price (0 = unset)", 0.0,
                                      value=inventory.min_accept_price or 0.0,
                                      step=1.0, format="%.2f", key="min_price")
+        target_roi = c6.number_input("Target ROI %", 0.0, 500.0,
+                                     value=inventory.target_roi_pct or 20.0,
+                                     step=5.0, key="target_roi")
+
+        st.markdown("**Manual market inputs** — used until automatic comps are live.")
+        m1, m2, m3 = st.columns(3)
+        manual_mv = m1.number_input("Current market value (0 = unset)", 0.0,
+                                    value=inventory.manual_market_value or 0.0,
+                                    step=1.0, format="%.2f", key="manual_mv")
+        last_sold = m2.number_input("Last sold price (0 = unset)", 0.0,
+                                    value=inventory.last_sold_price or 0.0,
+                                    step=1.0, format="%.2f", key="last_sold")
+        low_ask = m3.number_input("Lowest active ask (0 = unset)", 0.0,
+                                  value=inventory.lowest_active_ask or 0.0,
+                                  step=1.0, format="%.2f", key="low_ask")
+
+        st.markdown("**Exit assumptions** — folded into the net-after-fees math.")
+        a1, a2, a3, a4 = st.columns(4)
+        supplies = a1.number_input("Supplies cost", 0.0, value=inventory.supplies_cost
+                                   or 0.0, step=0.25, format="%.2f", key="supplies")
+        buyer_ship = a2.number_input("Buyer ship charged", 0.0,
+                                     value=inventory.buyer_shipping_paid or 0.0,
+                                     step=0.5, format="%.2f", key="buyer_ship")
+        seller_ship = a3.number_input("My ship cost", 0.0,
+                                      value=inventory.seller_shipping_cost or 0.0,
+                                      step=0.5, format="%.2f", key="seller_ship")
+        promoted = a4.number_input("Promoted %", 0.0, 20.0,
+                                   value=inventory.promoted_listing_pct or 0.0,
+                                   step=0.5, format="%.1f", key="promoted_pct")
+
         if st.form_submit_button("Save", type="primary"):
             if target and min_accept and min_accept > target:
                 st.error("Min accept price is above the target sell price.")
             else:
+                new_status = InventoryStatus(status)
+                # Stamp the listed date the first time a card becomes listed.
+                date_listed = inventory.date_listed
+                if new_status == InventoryStatus.LISTED and date_listed is None:
+                    date_listed = date.today()
                 with open_session() as session:
-                    set_status(session, card.id,
-                               status=InventoryStatus(status),
+                    set_status(session, card.id, status=new_status,
                                quantity=int(quantity),
                                listed_price=listed or None, owner=owner)
                     set_targets(session, card.id,
                                 target_sell_price=target or None,
                                 min_accept_price=min_accept or None, owner=owner)
-                flash_and_rerun("Status and targets saved.")
+                    set_market_inputs(
+                        session, card.id, owner=owner,
+                        manual_market_value=manual_mv or None,
+                        last_sold_price=last_sold or None,
+                        lowest_active_ask=low_ask or None,
+                        target_roi_pct=target_roi or None,
+                        date_listed=date_listed,
+                        supplies_cost=supplies or None,
+                        buyer_shipping_paid=buyer_ship or None,
+                        seller_shipping_cost=seller_ship or None,
+                        promoted_listing_pct=promoted or None)
+                flash_and_rerun("Status, targets, and market inputs saved.")
 
     with pull_tab, st.form("pull_comps"):
         query = st.text_input("eBay search terms", value=describe_card(card),
