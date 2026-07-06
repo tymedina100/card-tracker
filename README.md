@@ -47,7 +47,7 @@ and scheduled refreshes.
 ## Deploying the dashboard to Streamlit Community Cloud
 
 The dashboard can be hosted for free at share.streamlit.io so it is reachable
-from a browser without installing anything locally. Two things to know
+from a browser without installing anything locally. Three things to know
 before doing this:
 
 - The hosted dashboard is fully usable in the browser: visitors can add
