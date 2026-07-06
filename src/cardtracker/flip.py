@@ -274,3 +274,96 @@ def confidence_bucket(confidence: float | None) -> str:
     if c >= 0.35:
         return "Medium"
     return "Low"
+
+
+# ---- Scan: is this price a good buy? ----------------------------------------
+# A single 0..100 score and a six-step rating scale for judging an asking price
+# against market. Fed by the scan feature: enter a price now, and once comps
+# (or a manual market value) exist, the same call grades it.
+
+PENDING_RATING = "Pending comps"
+
+# Ordered worst -> best. The scan meter and legend read off this list.
+BUY_RATINGS = ["Overpriced", "Slight Overpay", "Fair",
+               "Good Buy", "Great Buy", "Steal"]
+
+
+def _score_to_rating(score: int) -> str:
+    if score >= 90:
+        return "Steal"
+    if score >= 75:
+        return "Great Buy"
+    if score >= 60:
+        return "Good Buy"
+    if score >= 45:
+        return "Fair"
+    if score >= 30:
+        return "Slight Overpay"
+    return "Overpriced"
+
+
+@dataclass
+class BuyGrade:
+    """How good a buy a given price is against market, on a 0..100 scale."""
+
+    price: float
+    market_value: float | None
+    roi_at_price: float | None   # net ROI if bought here and resold at market
+    max_buy: float | None        # most you'd pay for the target ROI
+    score: int | None            # 0..100, None until a market value exists
+    rating: str                  # one of BUY_RATINGS, or PENDING_RATING
+    reason: str
+
+    @property
+    def is_pending(self) -> bool:
+        return self.score is None
+
+
+def grade_buy(
+    price: float | None,
+    market_value: float | None,
+    *,
+    target_roi_pct: float | None = DEFAULT_TARGET_ROI_PCT,
+    **exit_kwargs,
+) -> BuyGrade:
+    """Grade paying ``price`` for a card worth ``market_value``.
+
+    ``exit_kwargs`` are the same resale assumptions net_proceeds accepts
+    (buyer_shipping_paid, seller_shipping_cost, supplies_cost,
+    promoted_listing_pct, fee_rate, fixed_order_fee).
+
+    Until a market value is known (no comps and no manual value), the grade is
+    "Pending comps": the price is remembered and graded the moment a value
+    lands. The scoring anchors on ROI relative to the target: break-even scores
+    ~40, hitting the target scores ~70, doubling it scores ~100.
+    """
+    target = target_roi_pct if target_roi_pct is not None else DEFAULT_TARGET_ROI_PCT
+    max_buy = (max_buy_price(market_value, target, **exit_kwargs)
+               if market_value else None)
+
+    if not price or market_value is None:
+        return BuyGrade(
+            price=_num(price), market_value=market_value, roi_at_price=None,
+            max_buy=max_buy, score=None, rating=PENDING_RATING,
+            reason=("Saved. We'll grade this the moment comps or a market value "
+                    "exist for the card."),
+        )
+
+    net_at_market = net_proceeds(market_value, **exit_kwargs).net_proceeds
+    _, roi = profit_and_roi(net_at_market, price)  # ROI buying here, selling at market
+    roi = roi if roi is not None else 0.0
+
+    if target > 0:
+        raw = 40 + (roi / target) * 30
+    else:
+        raw = 50 + roi
+    score = int(max(0, min(100, round(raw))))
+    rating = _score_to_rating(score)
+
+    reason = (f"At ${price:,.2f} you'd net about {roi:+.1f}% after fees against "
+              f"your {target:.0f}% target (max buy ${max_buy:,.2f}). Rated "
+              f"{rating}.")
+    return BuyGrade(
+        price=_num(price), market_value=market_value, roi_at_price=round(roi, 1),
+        max_buy=max_buy, score=score, rating=rating, reason=reason,
+    )

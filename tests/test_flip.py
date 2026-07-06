@@ -132,3 +132,41 @@ def test_confidence_buckets():
     assert flip.confidence_bucket(0.5) == "Medium"
     assert flip.confidence_bucket(0.2) == "Low"
     assert flip.confidence_bucket(None) == "Low"
+
+
+def test_grade_buy_pending_without_market():
+    grade = flip.grade_buy(300.0, None)
+    assert grade.is_pending
+    assert grade.score is None
+    assert grade.rating == flip.PENDING_RATING
+
+
+def test_grade_buy_pending_without_price():
+    grade = flip.grade_buy(None, 400.0)
+    assert grade.is_pending
+    # max buy can still be shown even before a price is entered
+    assert grade.max_buy is not None
+
+
+def test_grade_buy_cheap_price_scores_high():
+    # Market 400 nets ~346.60; buying at 250 is a strong ROI -> Steal/Great.
+    grade = flip.grade_buy(250.0, 400.0, target_roi_pct=20.0)
+    assert grade.score is not None and grade.score >= 75
+    assert grade.rating in {"Great Buy", "Steal"}
+    assert grade.roi_at_price is not None and grade.roi_at_price > 20
+
+
+def test_grade_buy_at_market_is_overpriced():
+    grade = flip.grade_buy(400.0, 400.0, target_roi_pct=20.0)
+    assert grade.score is not None and grade.score < 45
+    assert grade.rating in {"Overpriced", "Slight Overpay"}
+
+
+def test_grade_buy_score_is_bounded():
+    assert 0 <= flip.grade_buy(10.0, 400.0).score <= 100
+    assert 0 <= flip.grade_buy(5000.0, 400.0).score <= 100
+
+
+def test_grade_buy_reason_mentions_rating():
+    grade = flip.grade_buy(250.0, 400.0)
+    assert grade.rating in grade.reason

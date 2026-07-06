@@ -294,6 +294,33 @@ hr {{ border-color: {BORDER_SOFT}; }}
 .ct-summary-reason {{ color: {MUTED}; font-size: 0.92rem; line-height: 1.5; }}
 .ct-num-pos {{ color: {POS}; font-weight: 600; }}
 .ct-num-neg {{ color: {NEG}; font-weight: 600; }}
+
+/* ---- Scan buy-grade meter ---------------------------------------------- */
+.ct-scan {{
+  border: 1px solid {BORDER}; border-radius: 16px; padding: 1.4rem 1.6rem;
+  background:
+    radial-gradient(600px 220px at 50% -20%, rgba(211,168,76,0.07), transparent 70%),
+    linear-gradient(180deg, {SURFACE}, {INK});
+  margin-bottom: 1rem;
+}}
+.ct-scan-top {{ display: flex; align-items: baseline; gap: 1rem;
+  justify-content: space-between; flex-wrap: wrap; margin-bottom: 1.1rem; }}
+.ct-scan-rating {{ font-family: 'Fraunces', serif; font-size: 2rem; font-weight: 600;
+  line-height: 1; }}
+.ct-scan-score {{ color: {MUTED}; font-size: 0.9rem; font-weight: 600; }}
+.ct-scan-score b {{ color: {TEXT}; font-size: 1.15rem; }}
+.ct-meter {{ position: relative; height: 12px; border-radius: 999px;
+  background: linear-gradient(90deg, {NEG} 0%, {GOLD} 50%, {POS} 100%); }}
+.ct-meter-mark {{ position: absolute; top: -5px; width: 5px; height: 22px;
+  background: {TEXT}; border-radius: 3px; transform: translateX(-50%);
+  box-shadow: 0 0 0 2px {INK}, 0 2px 6px rgba(0,0,0,0.5); }}
+.ct-meter-scale {{ display: flex; justify-content: space-between;
+  color: {MUTED}; font-size: 0.68rem; letter-spacing: 0.04em;
+  text-transform: uppercase; margin-top: 0.5rem; }}
+.ct-scan-rating.pos {{ color: {POS}; }}
+.ct-scan-rating.warn {{ color: {GOLD_SOFT}; }}
+.ct-scan-rating.neg {{ color: {NEG}; }}
+.ct-scan-rating.pending {{ color: {MUTED}; }}
 </style>
 """
 
@@ -388,3 +415,49 @@ def money_html(value: float | None, *, signed: bool = False,
         return text
     cls = "ct-num-pos" if value >= 0 else "ct-num-neg"
     return f'<span class="{cls}">{text}</span>'
+
+
+# ---- Scan buy-grade visuals -------------------------------------------------
+# Each rating maps to a badge colour, a coloured dot (for tables), and a tone
+# class for the big meter headline.
+_RATING_STYLE = {
+    "Steal": ("ct-badge-green", "🟢", "pos"),
+    "Great Buy": ("ct-badge-green", "🟢", "pos"),
+    "Good Buy": ("ct-badge-gold", "🟡", "warn"),
+    "Fair": ("ct-badge-gold", "🟡", "warn"),
+    "Slight Overpay": ("ct-badge-red", "🟠", "neg"),
+    "Overpriced": ("ct-badge-red", "🔴", "neg"),
+    "Pending comps": ("ct-badge-gray", "⚪", "pending"),
+}
+
+
+def rating_badge(rating: str) -> str:
+    css, _, _ = _RATING_STYLE.get(str(rating), ("ct-badge-gray", "⚪", "pending"))
+    return badge(str(rating), css)
+
+
+def rating_dot(rating: str) -> str:
+    """Coloured-dot + label for dataframe cells that cannot render HTML."""
+    _, dot, _ = _RATING_STYLE.get(str(rating), ("ct-badge-gray", "⚪", "pending"))
+    return f"{dot} {rating}"
+
+
+def buy_meter(score: int | None, rating: str) -> str:
+    """A red→gold→green scale with a marker at ``score`` and the rating headline.
+    ``score`` None renders an empty, muted meter for a still-pending grade."""
+    _, _, tone = _RATING_STYLE.get(str(rating), ("", "", "pending"))
+    pct = max(0, min(100, score)) if score is not None else None
+    score_html = (f'<span class="ct-scan-score">Score <b>{score}</b> / 100</span>'
+                  if score is not None else
+                  '<span class="ct-scan-score">Awaiting market value</span>')
+    mark = (f'<div class="ct-meter-mark" style="left: {pct}%;"></div>'
+            if pct is not None else "")
+    return (
+        '<div class="ct-scan">'
+        '<div class="ct-scan-top">'
+        f'<span class="ct-scan-rating {tone}">{rating}</span>{score_html}</div>'
+        f'<div class="ct-meter">{mark}</div>'
+        '<div class="ct-meter-scale"><span>Overpriced</span><span>Fair</span>'
+        '<span>Steal</span></div>'
+        '</div>'
+    )
