@@ -57,11 +57,14 @@ from cardtracker.webui.shared import (
     show_flash,
     style_chart,
 )
+from cardtracker.webui.theme import page_header
 
 
 def cards_page() -> None:
     show_flash()
-    st.title("🗂️ Cards")
+    page_header("Cards",
+                "Your catalog of card identities. A PSA 10 and a PSA 9 of the "
+                "same card are tracked separately.")
     owner = current_owner()
     with open_session() as session:
         cards = session.exec(
@@ -211,7 +214,9 @@ def _price_history_chart(comps: list[Comp],
 
 def card_detail_page() -> None:
     show_flash()
-    st.title("🔎 Card detail")
+    page_header("Card Detail",
+                "Price history, market stats, forecast, and position for a "
+                "single card, with every buy/sell action.")
     owner = current_owner()
     with open_session() as session:
         card = card_picker(session, owner, key="detail_card")

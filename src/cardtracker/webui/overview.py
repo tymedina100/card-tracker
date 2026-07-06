@@ -13,11 +13,14 @@ from cardtracker.webui.shared import (
     open_session,
     show_flash,
 )
+from cardtracker.webui.theme import page_header
 
 
 def portfolio_page() -> None:
     show_flash()
-    st.title("🏠 Portfolio")
+    page_header("Portfolio",
+                "Cost basis, live market value, and realized and unrealized "
+                "profit across your holdings.")
     owner = current_owner()
     with open_session() as session:
         holdings = unrealized_summary(session, fee_model(), owner=owner)
@@ -37,7 +40,7 @@ def portfolio_page() -> None:
         ("Realized P&L", money(realized_total), f"{realized_total:+,.2f}"),
     ]
     for column, (label, value, delta) in zip(columns, metrics, strict=True):
-        with column, st.container(border=True):
+        with column:
             st.metric(label, value, delta=delta)
 
     st.subheader("Holdings")
