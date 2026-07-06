@@ -17,11 +17,13 @@ from cardtracker.webui.shared import (
     show_flash,
     style_chart,
 )
+from cardtracker.webui.theme import page_header
 
 
 def movers_page() -> None:
     show_flash()
-    st.title("📈 Movers")
+    page_header("Movers",
+                "Every card's forecast at a chosen horizon, ranked by confidence.")
     horizon = st.slider("Horizon (days)", 7, 90, 30, step=1, key="movers_horizon")
     owner = current_owner()
     with open_session() as session:
@@ -55,7 +57,8 @@ def movers_page() -> None:
 
 def deals_page() -> None:
     show_flash()
-    st.title("💰 Deals")
+    page_header("Deals",
+                "Active asks priced under your max buy for a target return.")
     col1, col2, col3 = st.columns(3)
     target_roi = col1.slider("Target ROI %", 5, 100, 30, step=5, key="deals_roi")
     days = col2.slider("Asks seen within (days)", 1, 60, 14, key="deals_days")
@@ -88,7 +91,8 @@ def deals_page() -> None:
 
 def accuracy_page() -> None:
     show_flash()
-    st.title("🎯 Prediction accuracy")
+    page_header("Prediction Accuracy",
+                "Backtested hit rate and per-direction accuracy over time.")
     col1, col2 = st.columns(2)
     horizon = col1.slider("Horizon (days)", 7, 90, 30, step=1, key="acc_horizon")
     step = col2.slider("Replay step (days)", 1, 30, 7, key="acc_step")
@@ -100,7 +104,7 @@ def accuracy_page() -> None:
                 f"least {30 + horizon} days for a card.")
         return
     c1, c2 = st.columns(2)
-    with c1, st.container(border=True):
+    with c1:
         st.metric("Hit rate", f"{report.hit_rate:.1%}",
                   delta=f"{report.hits} of {report.scored}")
     with c2, st.container(border=True):

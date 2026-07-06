@@ -24,6 +24,7 @@ from cardtracker.webui.shared import (
     open_session,
     show_flash,
 )
+from cardtracker.webui.theme import page_header
 
 CSV_EXAMPLE = """card_id,sold_date,price,shipping,currency,title,condition,listing_url
 1,2026-06-28,415.00,4.99,USD,1999 Pokemon Base Set Charizard PSA 9,Graded,https://ebay.com/itm/123
@@ -33,7 +34,9 @@ CSV_EXAMPLE = """card_id,sold_date,price,shipping,currency,title,condition,listi
 
 def data_page() -> None:
     show_flash()
-    st.title("📥 Data")
+    page_header("Data",
+                "Import sold comps, refresh stats, score predictions, and export "
+                "your collection.")
     owner = current_owner()
 
     st.subheader("Import sold comps from CSV")
@@ -141,7 +144,8 @@ def data_page() -> None:
 
 def calculator_page() -> None:
     show_flash()
-    st.title("🧮 Calculators")
+    page_header("Calculators",
+                "Net-after-fees and max-buy-price, live as you type.")
     net_tab, maxbuy_tab = st.tabs(["💵 Net after fees", "🎯 Max buy price"])
 
     with net_tab:
@@ -169,10 +173,9 @@ def calculator_page() -> None:
         if shipping_cost:
             rows.append({"item": "shipping cost", "amount": -shipping_cost})
         st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-        with st.container(border=True):
-            st.metric("Net proceeds", money(breakdown.net),
-                      delta=f"-{money(breakdown.total_fees + shipping_cost)} "
-                      "total costs")
+        st.metric("Net proceeds", money(breakdown.net),
+                  delta=f"-{money(breakdown.total_fees + shipping_cost)} "
+                  "total costs")
         if tax:
             st.caption("Sales tax raises the fee base but never reaches the "
                        "seller.")
@@ -208,12 +211,12 @@ def calculator_page() -> None:
                                    shipping_cost=ship)
         flag = " *" if result.market_price_type == "ask" else ""
         m1, m2, m3 = st.columns(3)
-        with m1, st.container(border=True):
+        with m1:
             st.metric(f"Market ({result.market_price_type} median){flag}",
                       money(result.market))
-        with m2, st.container(border=True):
+        with m2:
             st.metric("Net if sold at market", money(result.net_at_market))
-        with m3, st.container(border=True):
+        with m3:
             st.metric("Max buy price (delivered)", money(result.max_buy))
         if flag:
             st.caption("* market stat from ask median, no sold data")
