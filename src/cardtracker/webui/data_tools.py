@@ -36,6 +36,13 @@ CARD_COLUMNS = ["category", "player_or_character", "set_name", "year",
                 "cert_number", "notes"]
 
 
+def _clean_cell(value) -> str:
+    """CSV/spreadsheet blanks should stay blank, not become the string 'nan'."""
+    if value is None or pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
 def _cards_dataframe(cards: list[Card]) -> pd.DataFrame:
     return pd.DataFrame([{
         "id": c.id,
@@ -79,9 +86,9 @@ def _import_cards_from_df(df: pd.DataFrame, owner: str) -> tuple[int, list[str]]
     with open_session() as session:
         for i, row in df.iterrows():
             line = i + 2  # header is line 1
-            category = str(row.get("category", "")).strip().lower()
-            player = str(row.get("player_or_character", "")).strip()
-            set_name = str(row.get("set_name", "")).strip()
+            category = _clean_cell(row.get("category", "")).lower()
+            player = _clean_cell(row.get("player_or_character", ""))
+            set_name = _clean_cell(row.get("set_name", ""))
             if category not in valid_categories:
                 errors.append(f"line {line}: category '{category}' is not "
                               f"{' or '.join(sorted(valid_categories))}")
@@ -89,11 +96,11 @@ def _import_cards_from_df(df: pd.DataFrame, owner: str) -> tuple[int, list[str]]
             if not player or not set_name:
                 errors.append(f"line {line}: player_or_character and set_name required")
                 continue
-            grader = str(row.get("grader", "raw")).strip() or "raw"
+            grader = _clean_cell(row.get("grader", "raw")) or "raw"
             if grader not in valid_graders:
                 grader = "raw"
             try:
-                year = int(float(row.get("year", 0) or 0))
+                year = int(float(_clean_cell(row.get("year", 0)) or 0))
             except (ValueError, TypeError):
                 year = 0
             session.add(Card(
@@ -102,12 +109,12 @@ def _import_cards_from_df(df: pd.DataFrame, owner: str) -> tuple[int, list[str]]
                 player_or_character=player,
                 set_name=set_name,
                 year=year,
-                card_number=str(row.get("card_number", "") or "").strip(),
-                variation_or_parallel=str(row.get("variation_or_parallel", "") or "").strip(),
+                card_number=_clean_cell(row.get("card_number", "")),
+                variation_or_parallel=_clean_cell(row.get("variation_or_parallel", "")),
                 grader=Grader(grader),
-                grade=str(row.get("grade", "") or "").strip(),
-                cert_number=(str(row.get("cert_number", "")).strip() or None),
-                notes=str(row.get("notes", "") or "").strip(),
+                grade=_clean_cell(row.get("grade", "")),
+                cert_number=(_clean_cell(row.get("cert_number", "")) or None),
+                notes=_clean_cell(row.get("notes", "")),
             ))
             added += 1
         session.commit()

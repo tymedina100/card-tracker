@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 from cardtracker.config import Settings, load_settings
 from cardtracker.db import get_engine, get_session, init_db
 from cardtracker.fees import FeeModel
-from cardtracker.models import Card, describe_card
+from cardtracker.models import Card, Category, describe_card
 
 ASK_NOTE = "Values marked with an asterisk use the ask median because no sold data exists yet."
 
@@ -89,13 +89,15 @@ def all_cards(session: Session, owner: str) -> list[Card]:
     ).all()
 
 
-def distinct_values(session: Session, column, owner: str) -> list[str]:
+def distinct_values(session: Session, column, owner: str,
+                    category: Category | str | None = None) -> list[str]:
     """Sorted, de-duplicated non-empty values already stored in an owner's Card
     column, for example every set name their collection has used. Feeds the entry
     dropdowns so previously typed values resurface."""
-    rows = session.exec(
-        select(column).where(Card.owner == owner).distinct()
-    ).all()
+    query = select(column).where(Card.owner == owner)
+    if category is not None:
+        query = query.where(Card.category == Category(category))
+    rows = session.exec(query.distinct()).all()
     values = {str(v).strip() for v in rows if v is not None and str(v).strip()}
     return sorted(values, key=str.casefold)
 

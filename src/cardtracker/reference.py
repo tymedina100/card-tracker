@@ -104,6 +104,41 @@ PARALLELS = [
     "1/1",
 ]
 
+POKEMON_PARALLELS = [
+    "Base",
+    "Holo",
+    "Reverse Holo",
+    "1st Edition",
+    "Shadowless",
+    "Unlimited",
+    "Full Art",
+    "Alt Art",
+    "Secret Rare",
+    "Rainbow Rare",
+    "Gold",
+]
+
+SPORTS_PARALLELS = [
+    "Base",
+    "Refractor",
+    "X-Fractor",
+    "Prizm Silver",
+    "Prizm",
+    "Prizm Red",
+    "Prizm Blue",
+    "Prizm Green",
+    "Prizm Gold /10",
+    "Prizm Black /1",
+    "Silver",
+    "Sapphire",
+    "Wave",
+    "Shimmer",
+    "Numbered /99",
+    "Numbered /25",
+    "Numbered /10",
+    "1/1",
+]
+
 POPULAR_PLAYERS = [
     "Michael Jordan",
     "LeBron James",
@@ -153,3 +188,10 @@ def players_for(category: str | Category) -> list[str]:
     if str(category) == Category.POKEMON:
         return POPULAR_CHARACTERS
     return POPULAR_PLAYERS
+
+
+def parallels_for(category: str | Category) -> list[str]:
+    """Curated parallel list for a category."""
+    if str(category) == Category.POKEMON:
+        return POKEMON_PARALLELS
+    return SPORTS_PARALLELS

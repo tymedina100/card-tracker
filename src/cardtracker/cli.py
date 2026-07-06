@@ -513,9 +513,10 @@ def set_status_command(
         raise typer.Exit(code=1)
     with get_session(engine) as session:
         card = _get_card_or_exit(session, card_id)
-        inventory = set_status(session, card_id, status=parsed_status,
-                               quantity=quantity, listed_price=listed_price,
-                               owner=OWNER)
+        updates = {"status": parsed_status, "quantity": quantity, "owner": OWNER}
+        if listed_price is not None:
+            updates["listed_price"] = listed_price
+        inventory = set_status(session, card_id, **updates)
         listed = (f", listed at {inventory.listed_price:,.2f}"
                   if inventory.listed_price else "")
         typer.secho(f"Card {card_id} ({_describe(card)}): {inventory.status}, "
@@ -589,8 +590,12 @@ def set_targets_command(
         raise typer.Exit(code=1)
     with get_session(engine) as session:
         card = _get_card_or_exit(session, card_id)
-        inventory = set_targets(session, card_id, target_sell_price=target,
-                                min_accept_price=min_accept, owner=OWNER)
+        updates = {"owner": OWNER}
+        if target is not None:
+            updates["target_sell_price"] = target
+        if min_accept is not None:
+            updates["min_accept_price"] = min_accept
+        inventory = set_targets(session, card_id, **updates)
         target_text = (f"{inventory.target_sell_price:,.2f}"
                        if inventory.target_sell_price else "unset")
         min_text = (f"{inventory.min_accept_price:,.2f}"
