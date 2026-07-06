@@ -33,6 +33,15 @@ def get_settings() -> Settings:
     return _engine()[0]
 
 
+def auth_configured() -> bool:
+    """True when Google sign-in secrets are present, so the app should gate
+    behind a login. False in local dev, where the app runs open."""
+    try:
+        return "auth" in st.secrets
+    except Exception:  # noqa: BLE001  st.secrets raises when no secrets file exists
+        return False
+
+
 def current_owner() -> str:
     """Identity used to scope every query to the signed-in user. Uses the Google
     account email when logged in; falls back to a fixed local owner (overridable
