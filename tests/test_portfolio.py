@@ -187,6 +187,16 @@ class TestInventoryAndTargets:
         assert inventory.quantity == 3
         assert inventory.listed_price == 450.0
 
+    def test_set_status_can_clear_listed_price(self, session, sample_card):
+        from cardtracker.models import InventoryStatus
+        from cardtracker.portfolio import set_status
+
+        set_status(session, sample_card.id, status=InventoryStatus.LISTED,
+                   listed_price=450.0)
+        inventory = set_status(session, sample_card.id, listed_price=None)
+        assert inventory.listed_price is None
+        assert inventory.status == "listed"
+
     def test_inventory_view_filters_by_status(self, session, sample_card):
         from cardtracker.models import Card, Category, InventoryStatus
         from cardtracker.portfolio import inventory_view, set_status
@@ -213,6 +223,16 @@ class TestInventoryAndTargets:
         inventory = set_targets(session, sample_card.id, min_accept_price=430.0)
         assert inventory.target_sell_price == 500.0
         assert inventory.min_accept_price == 430.0
+
+    def test_set_targets_can_clear_values(self, session, sample_card):
+        from cardtracker.portfolio import set_targets
+
+        set_targets(session, sample_card.id, target_sell_price=500.0,
+                    min_accept_price=440.0)
+        inventory = set_targets(session, sample_card.id, target_sell_price=None,
+                                min_accept_price=None)
+        assert inventory.target_sell_price is None
+        assert inventory.min_accept_price is None
 
     def test_inventory_view_includes_market(self, session, sample_card):
         from cardtracker.models import PriceSnapshot, PriceType

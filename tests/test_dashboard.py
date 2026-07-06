@@ -140,9 +140,10 @@ class TestForms:
     def test_add_card_form(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DB_PATH", str(tmp_path / "forms.db"))
         at = run_view("Cards")
-        # player and set are now curated dropdowns; these values are curated options
-        at.selectbox(key="add_player").set_value("Pikachu")
-        at.selectbox(key="add_set").set_value("Jungle")
+        at.selectbox(key="add_category").set_value("pokemon").run()
+        # Player and set suggestions are narrowed by category.
+        at.selectbox(key="add_player_pokemon").set_value("Pikachu")
+        at.selectbox(key="add_set_pokemon").set_value("Jungle")
         at.number_input(key="add_year").set_value(1999)
         submit(at, "Add card")
         assert "Added card" in success_text(at)

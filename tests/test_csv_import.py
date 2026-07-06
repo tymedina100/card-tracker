@@ -1,9 +1,13 @@
+from contextlib import contextmanager
+
+import pandas as pd
 import pytest
 from sqlmodel import select
 from tests.conftest import VALID_CSV
 
-from cardtracker.models import Comp
+from cardtracker.models import Card, Comp
 from cardtracker.sources import CsvImportError, CsvImportSource, save_comps
+from cardtracker.webui import data_tools
 
 
 def test_valid_csv_imports_all_rows(sold_csv):
@@ -78,3 +82,35 @@ def test_saved_comps_stamped_sold_and_csv(session, sample_card, sold_csv):
     comps = session.exec(select(Comp)).all()
     assert len(comps) == 2
     assert all(c.source == "csv" and c.price_type == "sold" for c in comps)
+
+
+def test_card_csv_import_keeps_blank_cells_blank(session, monkeypatch):
+    @contextmanager
+    def _session():
+        yield session
+
+    monkeypatch.setattr(data_tools, "open_session", _session)
+    df = pd.DataFrame([{
+        "category": "pokemon",
+        "player_or_character": "Charizard",
+        "set_name": "Base Set",
+        "year": 1999,
+        "card_number": float("nan"),
+        "variation_or_parallel": float("nan"),
+        "grader": float("nan"),
+        "grade": float("nan"),
+        "cert_number": float("nan"),
+        "notes": float("nan"),
+    }])
+
+    added, errors = data_tools._import_cards_from_df(df, "alice")
+
+    assert added == 1
+    assert errors == []
+    card = session.exec(select(Card)).one()
+    assert card.card_number == ""
+    assert card.variation_or_parallel == ""
+    assert card.grader == "raw"
+    assert card.grade == ""
+    assert card.cert_number is None
+    assert card.notes == ""

@@ -7,6 +7,7 @@ is the sum across its buy transactions; per-copy cost is the average.
 
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 from sqlmodel import Session, select
 
@@ -23,6 +24,8 @@ from cardtracker.models import (
     TransactionType,
 )
 from cardtracker.stats import latest_snapshots
+
+_UNSET = object()
 
 
 def delete_card(session: Session, card_id: int, *, owner: str = "") -> bool:
@@ -273,7 +276,7 @@ def realized_summary(session: Session, *, owner: str = "",
 
 
 def set_status(session: Session, card_id: int, status: InventoryStatus | None = None,
-               quantity: int | None = None, listed_price: float | None = None, *,
+               quantity: int | None = None, listed_price: Any = _UNSET, *,
                owner: str = "") -> Inventory:
     """Update inventory status, quantity, or listed price for a card."""
     inventory = get_or_create_inventory(session, card_id, owner=owner)
@@ -281,7 +284,7 @@ def set_status(session: Session, card_id: int, status: InventoryStatus | None = 
         inventory.status = status
     if quantity is not None:
         inventory.quantity = quantity
-    if listed_price is not None:
+    if listed_price is not _UNSET:
         inventory.listed_price = listed_price
     session.add(inventory)
     session.commit()
@@ -289,13 +292,13 @@ def set_status(session: Session, card_id: int, status: InventoryStatus | None = 
     return inventory
 
 
-def set_targets(session: Session, card_id: int, target_sell_price: float | None = None,
-                min_accept_price: float | None = None, *, owner: str = "") -> Inventory:
+def set_targets(session: Session, card_id: int, target_sell_price: Any = _UNSET,
+                min_accept_price: Any = _UNSET, *, owner: str = "") -> Inventory:
     """Store target sell price and minimum acceptable price for a card."""
     inventory = get_or_create_inventory(session, card_id, owner=owner)
-    if target_sell_price is not None:
+    if target_sell_price is not _UNSET:
         inventory.target_sell_price = target_sell_price
-    if min_accept_price is not None:
+    if min_accept_price is not _UNSET:
         inventory.min_accept_price = min_accept_price
     session.add(inventory)
     session.commit()

@@ -1,11 +1,12 @@
 from cardtracker import reference
 from cardtracker.models import Card, Category, Grader
-from cardtracker.reference import players_for, sets_for
+from cardtracker.reference import parallels_for, players_for, sets_for
 from cardtracker.webui.shared import distinct_values, merge_options
 
 
 def test_seed_lists_are_non_empty():
     for name in ("POKEMON_SETS", "SPORTS_SETS", "PARALLELS",
+                 "POKEMON_PARALLELS", "SPORTS_PARALLELS",
                  "POPULAR_PLAYERS", "POPULAR_CHARACTERS", "GRADES"):
         assert getattr(reference, name), f"{name} should not be empty"
 
@@ -19,6 +20,13 @@ def test_sets_for_branches_by_category():
 def test_players_for_branches_by_category():
     assert players_for(Category.POKEMON) is reference.POPULAR_CHARACTERS
     assert players_for(Category.SPORTS) is reference.POPULAR_PLAYERS
+
+
+def test_parallels_for_branches_by_category():
+    assert parallels_for(Category.POKEMON) is reference.POKEMON_PARALLELS
+    assert parallels_for(Category.SPORTS) is reference.SPORTS_PARALLELS
+    assert "Shadowless" in parallels_for(Category.POKEMON)
+    assert "Prizm Silver" in parallels_for(Category.SPORTS)
 
 
 def test_merge_options_puts_existing_first_and_dedupes():
@@ -56,3 +64,19 @@ def test_distinct_values_returns_used_column_values(session):
     # blank grades are excluded
     assert distinct_values(session, Card.grade, "alice") == ["10", "9"]
     assert distinct_values(session, Card.set_name, "bob") == ["Prizm"]
+
+
+def test_distinct_values_can_filter_by_category(session):
+    session.add(Card(owner="alice", category=Category.POKEMON,
+                     player_or_character="Charizard", set_name="Base Set",
+                     year=1999, grader=Grader.PSA, grade="9"))
+    session.add(Card(owner="alice", category=Category.SPORTS,
+                     player_or_character="Michael Jordan", set_name="Fleer",
+                     year=1986, grader=Grader.PSA, grade="8"))
+    session.commit()
+
+    assert distinct_values(session, Card.player_or_character, "alice",
+                           Category.POKEMON) == ["Charizard"]
+    assert distinct_values(session, Card.player_or_character, "alice",
+                           Category.SPORTS) == ["Michael Jordan"]
+    assert distinct_values(session, Card.set_name, "alice", "sports") == ["Fleer"]

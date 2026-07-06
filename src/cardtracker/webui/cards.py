@@ -34,11 +34,9 @@ from cardtracker.portfolio import (
 from cardtracker.predict import predict_card
 from cardtracker.reference import (
     GRADES,
-    PARALLELS,
-    POKEMON_SETS,
-    POPULAR_CHARACTERS,
-    POPULAR_PLAYERS,
-    SPORTS_SETS,
+    parallels_for,
+    players_for,
+    sets_for,
 )
 from cardtracker.sources import BrowseApiSource, save_comps
 from cardtracker.stats import latest_snapshots, refresh_snapshots
@@ -76,29 +74,36 @@ def cards_page() -> None:
                 select(Inventory).where(Inventory.owner == owner)
             ).all()
         }
-        used_players = distinct_values(session, Card.player_or_character, owner)
-        used_sets = distinct_values(session, Card.set_name, owner)
-        used_parallels = distinct_values(session, Card.variation_or_parallel, owner)
         used_grades = distinct_values(session, Card.grade, owner)
 
     with st.expander("➕ Add a card", expanded=not cards):
+        st.caption("Choose a category first so suggestions stay relevant to the "
+                   "kind of card you are adding.")
         with st.form("add_card", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
             category = c1.selectbox("Category", [c.value for c in Category],
                                     key="add_category")
+            selected_category = Category(category)
+            with open_session() as session:
+                used_players = distinct_values(
+                    session, Card.player_or_character, owner, selected_category)
+                used_sets = distinct_values(
+                    session, Card.set_name, owner, selected_category)
+                used_parallels = distinct_values(
+                    session, Card.variation_or_parallel, owner, selected_category)
             with c2:
                 player = combo("Player or character",
-                               POPULAR_CHARACTERS + POPULAR_PLAYERS,
-                               used_players, key="add_player")
+                               players_for(selected_category),
+                               used_players, key=f"add_player_{category}")
             with c3:
-                set_name = combo("Set name", POKEMON_SETS + SPORTS_SETS,
-                                 used_sets, key="add_set")
+                set_name = combo("Set name", sets_for(selected_category),
+                                 used_sets, key=f"add_set_{category}")
             c4, c5, c6 = st.columns(3)
             year = c4.number_input("Year", 1900, 2100, 2024, key="add_year")
             number = c5.text_input("Card number", key="add_number")
             with c6:
-                parallel = combo("Variation or parallel", PARALLELS,
-                                 used_parallels, key="add_parallel")
+                parallel = combo("Variation or parallel", parallels_for(selected_category),
+                                 used_parallels, key=f"add_parallel_{category}")
             c7, c8, c9 = st.columns(3)
             grader = c7.selectbox("Grader", [g.value for g in Grader],
                                   index=len(Grader) - 1, key="add_grader")
@@ -113,7 +118,7 @@ def cards_page() -> None:
                 else:
                     card = Card(
                         owner=owner,
-                        category=Category(category),
+                        category=selected_category,
                         player_or_character=player.strip(),
                         set_name=set_name.strip(),
                         year=int(year),
