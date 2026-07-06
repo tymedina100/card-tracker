@@ -61,6 +61,41 @@ def all_cards(session: Session) -> list[Card]:
     return session.exec(select(Card).order_by(Card.id)).all()
 
 
+def distinct_values(session: Session, column) -> list[str]:
+    """Sorted, de-duplicated non-empty values already stored in a Card column,
+    for example every set name the collection has used. Feeds the entry
+    dropdowns so previously typed values resurface."""
+    rows = session.exec(select(column).distinct()).all()
+    values = {str(v).strip() for v in rows if v is not None and str(v).strip()}
+    return sorted(values, key=str.casefold)
+
+
+def merge_options(existing: list[str], curated: list[str]) -> list[str]:
+    """Existing collection values first, then curated suggestions, trimmed and
+    de-duplicated case-insensitively. The order surfaces what the user actually
+    uses above the generic popular list."""
+    options: list[str] = []
+    seen: set[str] = set()
+    for value in [*existing, *curated]:
+        cleaned = (value or "").strip()
+        if cleaned and cleaned.casefold() not in seen:
+            seen.add(cleaned.casefold())
+            options.append(cleaned)
+    return options
+
+
+def combo(label: str, curated: list[str], existing: list[str] = (), *,
+          key: str, help: str | None = None) -> str:
+    """A dropdown of popular plus previously used values that also accepts a new
+    typed entry. Returns '' when nothing is chosen."""
+    choice = st.selectbox(
+        label, merge_options(existing, curated), index=None,
+        placeholder=f"Select or type a {label.lower()}",
+        accept_new_options=True, key=key, help=help,
+    )
+    return (choice or "").strip()
+
+
 def card_picker(session: Session, label: str = "Card",
                 key: str = "card_picker") -> Card | None:
     cards = all_cards(session)

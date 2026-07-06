@@ -128,8 +128,9 @@ class TestForms:
     def test_add_card_form(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DB_PATH", str(tmp_path / "forms.db"))
         at = run_view("Cards")
-        at.text_input(key="add_player").set_value("Pikachu")
-        at.text_input(key="add_set").set_value("Jungle")
+        # player and set are now curated dropdowns; these values are curated options
+        at.selectbox(key="add_player").set_value("Pikachu")
+        at.selectbox(key="add_set").set_value("Jungle")
         at.number_input(key="add_year").set_value(1999)
         submit(at, "Add card")
         assert "Added card" in success_text(at)

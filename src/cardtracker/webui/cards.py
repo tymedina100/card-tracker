@@ -30,6 +30,14 @@ from cardtracker.portfolio import (
     unrealized_summary,
 )
 from cardtracker.predict import predict_card
+from cardtracker.reference import (
+    GRADES,
+    PARALLELS,
+    POKEMON_SETS,
+    POPULAR_CHARACTERS,
+    POPULAR_PLAYERS,
+    SPORTS_SETS,
+)
 from cardtracker.sources import BrowseApiSource, save_comps
 from cardtracker.stats import latest_snapshots, refresh_snapshots
 from cardtracker.webui.shared import (
@@ -37,6 +45,8 @@ from cardtracker.webui.shared import (
     SOLD_COLOR,
     card_label,
     card_picker,
+    combo,
+    distinct_values,
     fee_model,
     flash_and_rerun,
     get_settings,
@@ -55,6 +65,10 @@ def cards_page() -> None:
         comp_rows = session.exec(select(Comp.card_id, Comp.price_type)).all()
         inventories = {inv.card_id: inv
                        for inv in session.exec(select(Inventory)).all()}
+        used_players = distinct_values(session, Card.player_or_character)
+        used_sets = distinct_values(session, Card.set_name)
+        used_parallels = distinct_values(session, Card.variation_or_parallel)
+        used_grades = distinct_values(session, Card.grade)
     counts: dict[tuple[int, str], int] = defaultdict(int)
     for card_id, price_type in comp_rows:
         counts[(card_id, str(price_type))] += 1
@@ -64,16 +78,25 @@ def cards_page() -> None:
             c1, c2, c3 = st.columns(3)
             category = c1.selectbox("Category", [c.value for c in Category],
                                     key="add_category")
-            player = c2.text_input("Player or character", key="add_player")
-            set_name = c3.text_input("Set name", key="add_set")
+            with c2:
+                player = combo("Player or character",
+                               POPULAR_CHARACTERS + POPULAR_PLAYERS,
+                               used_players, key="add_player")
+            with c3:
+                set_name = combo("Set name", POKEMON_SETS + SPORTS_SETS,
+                                 used_sets, key="add_set")
             c4, c5, c6 = st.columns(3)
             year = c4.number_input("Year", 1900, 2100, 2024, key="add_year")
             number = c5.text_input("Card number", key="add_number")
-            parallel = c6.text_input("Variation or parallel", key="add_parallel")
+            with c6:
+                parallel = combo("Variation or parallel", PARALLELS,
+                                 used_parallels, key="add_parallel")
             c7, c8, c9 = st.columns(3)
             grader = c7.selectbox("Grader", [g.value for g in Grader],
                                   index=len(Grader) - 1, key="add_grader")
-            grade = c8.text_input("Grade (e.g. 10 or 9.5)", key="add_grade")
+            with c8:
+                grade = combo("Grade", GRADES, used_grades, key="add_grade",
+                              help="For raw cards leave blank.")
             cert = c9.text_input("Cert number", key="add_cert")
             notes = st.text_input("Notes", key="add_notes")
             if st.form_submit_button("Add card", type="primary"):
@@ -102,8 +125,25 @@ def cards_page() -> None:
         st.info("No cards yet. Add your first one above. A PSA 10 and a PSA 9 "
                 "of the same card are two separate cards.")
         return
+
+    f1, f2 = st.columns(2)
+    set_filter = f1.selectbox("Filter by set", ["All sets", *used_sets],
+                              key="cards_filter_set")
+    player_filter = f2.selectbox("Filter by player or character",
+                                 ["All players", *used_players],
+                                 key="cards_filter_player")
+    visible = [
+        card for card in cards
+        if (set_filter == "All sets" or card.set_name == set_filter)
+        and (player_filter == "All players"
+             or card.player_or_character == player_filter)
+    ]
+    if not visible:
+        st.caption("No cards match the current filters.")
+        return
+
     rows = []
-    for card in cards:
+    for card in visible:
         inventory = inventories.get(card.id)
         rows.append({
             "id": card.id,
