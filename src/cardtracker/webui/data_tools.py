@@ -17,6 +17,7 @@ from cardtracker.webui.shared import (
     all_cards,
     card_label,
     card_picker,
+    current_owner,
     fee_model,
     flash_and_rerun,
     money,
@@ -33,6 +34,7 @@ CSV_EXAMPLE = """card_id,sold_date,price,shipping,currency,title,condition,listi
 def data_page() -> None:
     show_flash()
     st.title("📥 Data")
+    owner = current_owner()
 
     st.subheader("Import sold comps from CSV")
     st.caption("Export solds from eBay Terapeak or build the file yourself. "
@@ -40,7 +42,7 @@ def data_page() -> None:
                "card_id, shipping, currency, title, condition, listing_url.")
     uploaded = st.file_uploader("Sold-comp CSV", type=["csv"], key="csv_upload")
     with open_session() as session:
-        cards = all_cards(session)
+        cards = all_cards(session, owner)
     c1, c2 = st.columns(2)
     options: list[Card | None] = [None] + cards
     default_card = c1.selectbox(
@@ -65,7 +67,9 @@ def data_page() -> None:
             for row in rows:
                 by_card[row.card_id].append(row.record)
             with open_session() as session:
-                missing = [cid for cid in by_card if session.get(Card, cid) is None]
+                missing = [cid for cid in by_card
+                           if (c := session.get(Card, cid)) is None
+                           or c.owner != owner]
                 if missing:
                     st.error(f"Unknown card id(s) in the file: "
                              f"{', '.join(map(str, sorted(missing)))}. Add those "
@@ -74,7 +78,7 @@ def data_page() -> None:
                     total = 0
                     for cid, records in by_card.items():
                         total += len(save_comps(session, cid, source, records))
-                        refresh_snapshots(session, card_id=cid)
+                        refresh_snapshots(session, card_id=cid, owner=owner)
                     skipped = (f", skipped {len(source.skipped)} bad row(s)"
                                if source.skipped else "")
                     flash_and_rerun(f"Imported {total} sold comps across "
@@ -92,7 +96,7 @@ def data_page() -> None:
                    "Run after importing or pulling new comps.")
         if st.button("🔄 Refresh now", key="refresh_all"):
             with open_session() as session:
-                written = refresh_snapshots(session)
+                written = refresh_snapshots(session, owner=owner)
             flash_and_rerun(f"Wrote {len(written)} snapshot(s).")
     with c2, st.container(border=True):
         st.markdown("**Score logged predictions**")
@@ -100,7 +104,7 @@ def data_page() -> None:
                    "horizon has passed.")
         if st.button("✅ Score now", key="score_predictions"):
             with open_session() as session:
-                scored = score_due_predictions(session)
+                scored = score_due_predictions(session, owner=owner)
             flash_and_rerun(f"Scored {scored} prediction(s).")
     st.caption("To refresh automatically on a schedule, keep this running in a "
                "terminal: cardtracker schedule-refresh --interval-hours 12")
@@ -148,7 +152,7 @@ def calculator_page() -> None:
         from cardtracker.deals import max_buy_price
 
         with open_session() as session:
-            card = card_picker(session, key="maxbuy_card")
+            card = card_picker(session, current_owner(), key="maxbuy_card")
             if card is None:
                 st.info("Add a card first to compute its max buy price.")
                 return

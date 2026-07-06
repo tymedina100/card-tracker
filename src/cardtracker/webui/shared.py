@@ -1,5 +1,7 @@
 """Shared helpers for the dashboard views."""
 
+import os
+
 import streamlit as st
 from sqlmodel import Session, select
 
@@ -9,6 +11,8 @@ from cardtracker.fees import FeeModel
 from cardtracker.models import Card, describe_card
 
 ASK_NOTE = "Values marked with an asterisk use the ask median because no sold data exists yet."
+
+DEV_OWNER = "local"
 
 SOLD_COLOR = "#35c26b"
 ASK_COLOR = "#8b97a8"
@@ -27,6 +31,19 @@ def _engine():
 
 def get_settings() -> Settings:
     return _engine()[0]
+
+
+def current_owner() -> str:
+    """Identity used to scope every query to the signed-in user. Uses the Google
+    account email when logged in; falls back to a fixed local owner (overridable
+    with CARDTRACKER_OWNER) so local dev and tests run without sign-in."""
+    try:
+        user = st.user
+        if getattr(user, "is_logged_in", False) and user.get("email"):
+            return user["email"]
+    except Exception:  # noqa: BLE001  st.user raises when auth is not configured
+        pass
+    return os.getenv("CARDTRACKER_OWNER", DEV_OWNER)
 
 
 def open_session() -> Session:
@@ -57,15 +74,19 @@ def show_flash() -> None:
         st.success(message)
 
 
-def all_cards(session: Session) -> list[Card]:
-    return session.exec(select(Card).order_by(Card.id)).all()
+def all_cards(session: Session, owner: str) -> list[Card]:
+    return session.exec(
+        select(Card).where(Card.owner == owner).order_by(Card.id)
+    ).all()
 
 
-def distinct_values(session: Session, column) -> list[str]:
-    """Sorted, de-duplicated non-empty values already stored in a Card column,
-    for example every set name the collection has used. Feeds the entry
+def distinct_values(session: Session, column, owner: str) -> list[str]:
+    """Sorted, de-duplicated non-empty values already stored in an owner's Card
+    column, for example every set name their collection has used. Feeds the entry
     dropdowns so previously typed values resurface."""
-    rows = session.exec(select(column).distinct()).all()
+    rows = session.exec(
+        select(column).where(Card.owner == owner).distinct()
+    ).all()
     values = {str(v).strip() for v in rows if v is not None and str(v).strip()}
     return sorted(values, key=str.casefold)
 
@@ -96,9 +117,9 @@ def combo(label: str, curated: list[str], existing: list[str] = (), *,
     return (choice or "").strip()
 
 
-def card_picker(session: Session, label: str = "Card",
+def card_picker(session: Session, owner: str, label: str = "Card",
                 key: str = "card_picker") -> Card | None:
-    cards = all_cards(session)
+    cards = all_cards(session, owner)
     if not cards:
         return None
     return st.selectbox(label, cards, format_func=card_label, key=key)

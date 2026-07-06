@@ -46,6 +46,7 @@ from cardtracker.webui.shared import (
     card_label,
     card_picker,
     combo,
+    current_owner,
     distinct_values,
     fee_model,
     flash_and_rerun,
@@ -60,15 +61,25 @@ from cardtracker.webui.shared import (
 def cards_page() -> None:
     show_flash()
     st.title("🗂️ Cards")
+    owner = current_owner()
     with open_session() as session:
-        cards = session.exec(select(Card).order_by(Card.id)).all()
-        comp_rows = session.exec(select(Comp.card_id, Comp.price_type)).all()
-        inventories = {inv.card_id: inv
-                       for inv in session.exec(select(Inventory)).all()}
-        used_players = distinct_values(session, Card.player_or_character)
-        used_sets = distinct_values(session, Card.set_name)
-        used_parallels = distinct_values(session, Card.variation_or_parallel)
-        used_grades = distinct_values(session, Card.grade)
+        cards = session.exec(
+            select(Card).where(Card.owner == owner).order_by(Card.id)
+        ).all()
+        card_ids = [card.id for card in cards]
+        comp_rows = (session.exec(
+            select(Comp.card_id, Comp.price_type)
+            .where(Comp.card_id.in_(card_ids))
+        ).all() if card_ids else [])
+        inventories = {
+            inv.card_id: inv for inv in session.exec(
+                select(Inventory).where(Inventory.owner == owner)
+            ).all()
+        }
+        used_players = distinct_values(session, Card.player_or_character, owner)
+        used_sets = distinct_values(session, Card.set_name, owner)
+        used_parallels = distinct_values(session, Card.variation_or_parallel, owner)
+        used_grades = distinct_values(session, Card.grade, owner)
     counts: dict[tuple[int, str], int] = defaultdict(int)
     for card_id, price_type in comp_rows:
         counts[(card_id, str(price_type))] += 1
@@ -104,6 +115,7 @@ def cards_page() -> None:
                     st.error("Player/character and set name are required.")
                 else:
                     card = Card(
+                        owner=owner,
                         category=Category(category),
                         player_or_character=player.strip(),
                         set_name=set_name.strip(),
@@ -199,8 +211,9 @@ def _price_history_chart(comps: list[Comp],
 def card_detail_page() -> None:
     show_flash()
     st.title("🔎 Card detail")
+    owner = current_owner()
     with open_session() as session:
-        card = card_picker(session, key="detail_card")
+        card = card_picker(session, owner, key="detail_card")
         if card is None:
             st.info("No cards yet. Add one in the Cards view first.")
             return
@@ -211,11 +224,12 @@ def card_detail_page() -> None:
             .order_by(PriceSnapshot.as_of_date)
         ).all()
         prediction = predict_card(session, card.id, log=False)
-        basis = cost_basis_summary(session, card_id=card.id)
-        holdings = [line for line in unrealized_summary(session, fee_model())
+        basis = cost_basis_summary(session, owner=owner, card_id=card.id)
+        holdings = [line for line in unrealized_summary(session, fee_model(),
+                                                        owner=owner)
                     if line.card.id == card.id]
         # viewing must not write rows; a pending Inventory still renders defaults
-        inventory = get_or_create_inventory(session, card.id)
+        inventory = get_or_create_inventory(session, card.id, owner=owner)
 
     st.subheader("Price history: ask vs sold")
     if comps:
@@ -303,7 +317,7 @@ def card_detail_page() -> None:
                                           buy_date=buy_date, fees=fees,
                                           shipping=shipping, taxes=taxes,
                                           grading=grading, platform=platform,
-                                          notes=notes)
+                                          notes=notes, owner=owner)
                 flash_and_rerun(f"Logged buy of one copy for a total cost of "
                                 f"{money(transaction.total_cost)}.")
 
@@ -331,8 +345,8 @@ def card_detail_page() -> None:
                 with open_session() as session:
                     log_sell(session, card.id, sale_price, sell_date=sell_date,
                              fees=sale_fees, shipping_cost=ship_cost,
-                             platform=sell_platform)
-                    cost = avg_cost_per_copy(session, card.id)
+                             platform=sell_platform, owner=owner)
+                    cost = avg_cost_per_copy(session, card.id, owner=owner)
                 net = sale_price - sale_fees - ship_cost
                 message = (f"Logged sell: net {money(net)} after fees "
                            f"{money(sale_fees)}.")
@@ -368,10 +382,10 @@ def card_detail_page() -> None:
                     set_status(session, card.id,
                                status=InventoryStatus(status),
                                quantity=int(quantity),
-                               listed_price=listed or None)
+                               listed_price=listed or None, owner=owner)
                     set_targets(session, card.id,
                                 target_sell_price=target or None,
-                                min_accept_price=min_accept or None)
+                                min_accept_price=min_accept or None, owner=owner)
                 flash_and_rerun("Status and targets saved.")
 
     with pull_tab, st.form("pull_comps"):
@@ -385,7 +399,7 @@ def card_detail_page() -> None:
                 records = source.fetch_comps(query, limit=limit)
                 with open_session() as session:
                     saved = save_comps(session, card.id, source, records)
-                    refresh_snapshots(session, card_id=card.id)
+                    refresh_snapshots(session, card_id=card.id, owner=owner)
                 flash_and_rerun(f"Saved {len(saved)} ask comps and refreshed "
                                 f"stats ({settings.ebay_env}).")
             except MissingCredentialsError as exc:

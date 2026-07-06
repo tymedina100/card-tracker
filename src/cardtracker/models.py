@@ -66,6 +66,7 @@ class Card(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
+    owner: str = Field(default="", index=True)
     category: Category = Field(sa_column=enum_column())
     player_or_character: str = Field(index=True)
     set_name: str = Field(index=True)
@@ -142,6 +143,7 @@ class Transaction(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
+    owner: str = Field(default="", index=True)
     card_id: int = Field(foreign_key="cards.id", index=True)
     type: TransactionType = Field(sa_column=enum_column())
     date: date
@@ -166,6 +168,7 @@ class Inventory(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
+    owner: str = Field(default="", index=True)
     card_id: int = Field(foreign_key="cards.id", index=True)
     status: InventoryStatus = Field(default=InventoryStatus.WATCHING, sa_column=enum_column())
     quantity: int = 1
@@ -183,6 +186,7 @@ class Prediction(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
+    owner: str = Field(default="", index=True)
     card_id: int = Field(foreign_key="cards.id", index=True)
     as_of_date: date
     predicted_direction: PredictedDirection = Field(sa_column=enum_column())

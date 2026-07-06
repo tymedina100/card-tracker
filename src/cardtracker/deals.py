@@ -72,13 +72,13 @@ def max_buy_price(session: Session, card_id: int, fee_model: FeeModel,
 
 def find_deals(session: Session, fee_model: FeeModel, target_roi_pct: float = 30.0,
                days: int = 14, shipping_cost: float = 0.0,
-               as_of: date | None = None) -> list[Deal]:
+               as_of: date | None = None, *, owner: str = "") -> list[Deal]:
     """Active ask listings from the last N days delivered below max buy price,
-    across all cards, best discount first."""
+    across the owner's cards, best discount first."""
     as_of = as_of or date.today()
     cutoff = as_of - timedelta(days=days)
     deals: list[Deal] = []
-    for card in session.exec(select(Card)).all():
+    for card in session.exec(select(Card).where(Card.owner == owner)).all():
         result = max_buy_price(session, card.id, fee_model,
                                target_roi_pct=target_roi_pct,
                                shipping_cost=shipping_cost)

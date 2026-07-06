@@ -33,6 +33,16 @@ def fresh_streamlit_caches():
     st.cache_resource.clear()
 
 
+TEST_OWNER = "local"
+
+
+@pytest.fixture(autouse=True)
+def pin_owner(monkeypatch):
+    """Pin the signed-in identity so current_owner() is deterministic in tests
+    (no Google sign-in) and matches the owner seeded data is created under."""
+    monkeypatch.setenv("CARDTRACKER_OWNER", TEST_OWNER)
+
+
 @pytest.fixture
 def seeded_db(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "dash.db"))
@@ -41,9 +51,9 @@ def seeded_db(tmp_path, monkeypatch):
     init_db(engine)
     today = date.today()
     with get_session(engine) as session:
-        card = Card(category=Category.POKEMON, player_or_character="Charizard",
-                    set_name="Base Set", year=1999, card_number="4",
-                    grader=Grader.PSA, grade="9")
+        card = Card(owner=TEST_OWNER, category=Category.POKEMON,
+                    player_or_character="Charizard", set_name="Base Set",
+                    year=1999, card_number="4", grader=Grader.PSA, grade="9")
         session.add(card)
         session.commit()
         session.refresh(card)
@@ -59,9 +69,11 @@ def seeded_db(tmp_path, monkeypatch):
                           title_raw="cheap ask", listing_url="https://ebay.com/itm/1"))
         session.add_all(comps)
         session.commit()
-        log_buy(session, card.id, price=280.0, buy_date=today - timedelta(days=60))
-        set_targets(session, card.id, target_sell_price=380.0, min_accept_price=330.0)
-        refresh_snapshots(session)
+        log_buy(session, card.id, price=280.0, buy_date=today - timedelta(days=60),
+                owner=TEST_OWNER)
+        set_targets(session, card.id, target_sell_price=380.0,
+                    min_accept_price=330.0, owner=TEST_OWNER)
+        refresh_snapshots(session, owner=TEST_OWNER)
     return card
 
 

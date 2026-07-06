@@ -78,13 +78,17 @@ def compute_snapshot(card_id: int, df: pd.DataFrame, price_type: PriceType,
 
 
 def refresh_snapshots(session: Session, as_of: date | None = None,
-                      card_id: int | None = None) -> list[PriceSnapshot]:
+                      card_id: int | None = None,
+                      owner: str | None = None) -> list[PriceSnapshot]:
     """Compute and store snapshots for every card, one row per price type that
-    has comps. Rerunning for the same date replaces that date's rows."""
+    has comps. Rerunning for the same date replaces that date's rows. When owner
+    is given, only that owner's cards are refreshed."""
     as_of = as_of or date.today()
     card_query = select(Card)
     if card_id is not None:
         card_query = card_query.where(Card.id == card_id)
+    if owner is not None:
+        card_query = card_query.where(Card.owner == owner)
     cards = session.exec(card_query).all()
     written: list[PriceSnapshot] = []
     for card in cards:

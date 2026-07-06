@@ -36,14 +36,23 @@ def test_merge_options_drops_blanks():
 
 
 def test_distinct_values_returns_used_column_values(session):
-    session.add(Card(category=Category.POKEMON, player_or_character="Charizard",
-                     set_name="Base Set", year=1999, grader=Grader.PSA, grade="9"))
-    session.add(Card(category=Category.POKEMON, player_or_character="Pikachu",
-                     set_name="Jungle", year=1999, grader=Grader.RAW, grade=""))
-    session.add(Card(category=Category.POKEMON, player_or_character="Charizard",
-                     set_name="Base Set", year=1999, grader=Grader.PSA, grade="10"))
+    session.add(Card(owner="alice", category=Category.POKEMON,
+                     player_or_character="Charizard", set_name="Base Set",
+                     year=1999, grader=Grader.PSA, grade="9"))
+    session.add(Card(owner="alice", category=Category.POKEMON,
+                     player_or_character="Pikachu", set_name="Jungle",
+                     year=1999, grader=Grader.RAW, grade=""))
+    session.add(Card(owner="alice", category=Category.POKEMON,
+                     player_or_character="Charizard", set_name="Base Set",
+                     year=1999, grader=Grader.PSA, grade="10"))
+    # a different owner's set must not leak into alice's dropdown
+    session.add(Card(owner="bob", category=Category.SPORTS,
+                     player_or_character="Luka Doncic", set_name="Prizm",
+                     year=2018, grader=Grader.PSA, grade="10"))
     session.commit()
-    assert distinct_values(session, Card.set_name) == ["Base Set", "Jungle"]
-    assert distinct_values(session, Card.player_or_character) == ["Charizard", "Pikachu"]
+    assert distinct_values(session, Card.set_name, "alice") == ["Base Set", "Jungle"]
+    assert distinct_values(session, Card.player_or_character, "alice") == [
+        "Charizard", "Pikachu"]
     # blank grades are excluded
-    assert distinct_values(session, Card.grade) == ["10", "9"]
+    assert distinct_values(session, Card.grade, "alice") == ["10", "9"]
+    assert distinct_values(session, Card.set_name, "bob") == ["Prizm"]

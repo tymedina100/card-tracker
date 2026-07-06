@@ -7,6 +7,7 @@ from cardtracker.portfolio import realized_summary, unrealized_summary
 from cardtracker.webui.shared import (
     ASK_NOTE,
     card_label,
+    current_owner,
     fee_model,
     money,
     open_session,
@@ -17,9 +18,10 @@ from cardtracker.webui.shared import (
 def portfolio_page() -> None:
     show_flash()
     st.title("🏠 Portfolio")
+    owner = current_owner()
     with open_session() as session:
-        holdings = unrealized_summary(session, fee_model())
-        realized = realized_summary(session)
+        holdings = unrealized_summary(session, fee_model(), owner=owner)
+        realized = realized_summary(session, owner=owner)
 
     cost_total = sum(line.cost_basis for line in holdings)
     market_total = sum(line.market_per_copy * line.quantity
