@@ -22,6 +22,7 @@ from cardtracker.models import (
 from cardtracker.portfolio import (
     avg_cost_per_copy,
     cost_basis_summary,
+    delete_card,
     get_or_create_inventory,
     log_buy,
     log_sell,
@@ -406,3 +407,59 @@ def card_detail_page() -> None:
                 st.warning(str(exc))
             except Exception as exc:  # noqa: BLE001 surface eBay errors in the UI
                 st.error(f"eBay request failed: {exc}")
+
+    with st.expander("✏️ Edit or delete this card"):
+        with st.form("edit_card"):
+            categories = [c.value for c in Category]
+            graders = [g.value for g in Grader]
+            e1, e2, e3 = st.columns(3)
+            e_category = e1.selectbox("Category", categories,
+                                      index=categories.index(str(card.category)),
+                                      key="edit_category")
+            e_player = e2.text_input("Player or character",
+                                     value=card.player_or_character, key="edit_player")
+            e_set = e3.text_input("Set name", value=card.set_name, key="edit_set")
+            e4, e5, e6 = st.columns(3)
+            e_year = e4.number_input("Year", 1900, 2100, card.year, key="edit_year")
+            e_number = e5.text_input("Card number", value=card.card_number,
+                                     key="edit_number")
+            e_parallel = e6.text_input("Variation or parallel",
+                                       value=card.variation_or_parallel,
+                                       key="edit_parallel")
+            e7, e8, e9 = st.columns(3)
+            e_grader = e7.selectbox("Grader", graders,
+                                    index=graders.index(str(card.grader)),
+                                    key="edit_grader")
+            e_grade = e8.text_input("Grade", value=card.grade, key="edit_grade")
+            e_cert = e9.text_input("Cert number", value=card.cert_number or "",
+                                   key="edit_cert")
+            e_notes = st.text_input("Notes", value=card.notes, key="edit_notes")
+            if st.form_submit_button("Save changes", type="primary"):
+                if not e_player.strip() or not e_set.strip():
+                    st.error("Player/character and set name are required.")
+                else:
+                    with open_session() as session:
+                        db_card = session.get(Card, card.id)
+                        if db_card is not None and db_card.owner == owner:
+                            db_card.category = Category(e_category)
+                            db_card.player_or_character = e_player.strip()
+                            db_card.set_name = e_set.strip()
+                            db_card.year = int(e_year)
+                            db_card.card_number = e_number.strip()
+                            db_card.variation_or_parallel = e_parallel.strip()
+                            db_card.grader = Grader(e_grader)
+                            db_card.grade = e_grade.strip()
+                            db_card.cert_number = e_cert.strip() or None
+                            db_card.notes = e_notes.strip()
+                            session.add(db_card)
+                            session.commit()
+                    flash_and_rerun("Card updated.")
+
+        st.divider()
+        st.caption("Deleting removes this card and all of its comps, stats, buys, "
+                   "sells, and predictions. This cannot be undone.")
+        confirm = st.checkbox("I understand, delete this card", key="delete_confirm")
+        if st.button("🗑️ Delete card", disabled=not confirm, key="delete_card_btn"):
+            with open_session() as session:
+                delete_card(session, card.id, owner=owner)
+            flash_and_rerun("Card deleted.")

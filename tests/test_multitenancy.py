@@ -129,6 +129,18 @@ def test_predictions_cohort_and_scoring_scoped(session):
     assert score_due_predictions(session, today=TODAY, owner="bob@example.com") == 0
 
 
+def test_delete_card_cannot_delete_another_owner(session, two_owners):
+    alice, bob = two_owners
+    from cardtracker.portfolio import delete_card
+
+    assert delete_card(session, alice.id, owner="bob@example.com") is False
+    assert session.get(Card, alice.id) is not None
+    assert delete_card(session, alice.id, owner="alice@example.com") is True
+    assert session.get(Card, alice.id) is None
+    # Bob's card is untouched
+    assert session.get(Card, bob.id) is not None
+
+
 def test_backtest_scoped_to_owner(session):
     alice = _make_card(session, "alice@example.com")
     for days_ago in range(150, 0, -3):

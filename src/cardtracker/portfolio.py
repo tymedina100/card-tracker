@@ -11,8 +11,34 @@ from datetime import date
 from sqlmodel import Session, select
 
 from cardtracker.fees import FeeModel, compute_net
-from cardtracker.models import Card, Inventory, InventoryStatus, Transaction, TransactionType
+from cardtracker.models import (
+    Card,
+    Comp,
+    Inventory,
+    InventoryStatus,
+    Prediction,
+    PriceSnapshot,
+    Transaction,
+    TransactionType,
+)
 from cardtracker.stats import latest_snapshots
+
+
+def delete_card(session: Session, card_id: int, *, owner: str = "") -> bool:
+    """Remove a card and everything hanging off it (comps, snapshots, buys and
+    sells, inventory, predictions). Scoped to the owner: returns False and does
+    nothing if the card is missing or belongs to someone else."""
+    card = session.exec(
+        select(Card).where(Card.id == card_id).where(Card.owner == owner)
+    ).first()
+    if card is None:
+        return False
+    for model in (Comp, PriceSnapshot, Prediction, Transaction, Inventory):
+        for row in session.exec(select(model).where(model.card_id == card_id)).all():
+            session.delete(row)
+    session.delete(card)
+    session.commit()
+    return True
 
 
 def market_value(session: Session, card_id: int) -> tuple[float, str, date] | None:

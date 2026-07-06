@@ -109,6 +109,35 @@ def data_page() -> None:
     st.caption("To refresh automatically on a schedule, keep this running in a "
                "terminal: cardtracker schedule-refresh --interval-hours 12")
 
+    st.divider()
+    st.subheader("Export my collection")
+    st.caption("Download every card in your collection as a CSV backup.")
+    with open_session() as session:
+        export_cards = all_cards(session, owner)
+    if export_cards:
+        export_df = pd.DataFrame([{
+            "id": c.id,
+            "category": str(c.category),
+            "player_or_character": c.player_or_character,
+            "set_name": c.set_name,
+            "year": c.year,
+            "card_number": c.card_number,
+            "variation_or_parallel": c.variation_or_parallel,
+            "grader": str(c.grader),
+            "grade": c.grade,
+            "cert_number": c.cert_number or "",
+            "notes": c.notes,
+        } for c in export_cards])
+        st.download_button(
+            "⬇️ Download cards CSV",
+            export_df.to_csv(index=False).encode("utf-8"),
+            file_name="cardtracker_cards.csv",
+            mime="text/csv",
+            key="export_cards",
+        )
+    else:
+        st.caption("No cards to export yet.")
+
 
 def calculator_page() -> None:
     show_flash()

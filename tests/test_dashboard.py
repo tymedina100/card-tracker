@@ -208,6 +208,27 @@ class TestForms:
         assert "Prediction logged" in success_text(at)
 
 
+class TestManageCard:
+    def test_delete_card(self, seeded_db):
+        at = run_view("Card detail")
+        at.checkbox(key="delete_confirm").set_value(True).run()
+        submit(at, "🗑️ Delete card")
+        assert "deleted" in success_text(at).lower()
+        at2 = run_view("Cards")
+        assert not at2.dataframe  # collection is empty again
+
+    def test_edit_card_updates_fields(self, seeded_db):
+        at = run_view("Card detail")
+        at.text_input(key="edit_notes").set_value("gem mint corners")
+        submit(at, "Save changes")
+        assert "updated" in success_text(at).lower()
+
+    def test_export_button_present(self, seeded_db):
+        at = run_view("Data")
+        headers = " ".join(h.value for h in at.subheader)
+        assert "Export my collection" in headers
+
+
 class TestCalculators:
     def test_net_calculator(self, seeded_db):
         at = run_view("Calculators")
