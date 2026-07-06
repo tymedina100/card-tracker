@@ -192,6 +192,11 @@ class Inventory(SQLModel, table=True):
     buyer_shipping_paid: float | None = None
     seller_shipping_cost: float | None = None
     promoted_listing_pct: float | None = None
+    # Scan feature: a price captured for a card (typed now, later from a scanner).
+    # It is graded against market whenever a market value exists, so a scan saved
+    # before comps arrive gets graded automatically once they do.
+    scanned_price: float | None = None
+    scanned_at: date | None = None
 
 
 class Prediction(SQLModel, table=True):

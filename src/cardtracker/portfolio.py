@@ -462,12 +462,7 @@ def assess_card(session: Session, inventory: Inventory) -> CardAssessment:
                   else flip.DEFAULT_TARGET_ROI_PCT)
 
     # Per-card exit assumptions feed the fee model; all None-safe.
-    exit_kwargs = {
-        "buyer_shipping_paid": inventory.buyer_shipping_paid,
-        "seller_shipping_cost": inventory.seller_shipping_cost,
-        "supplies_cost": inventory.supplies_cost,
-        "promoted_listing_pct": (inventory.promoted_listing_pct or 0.0) / 100,
-    }
+    exit_kwargs = _exit_kwargs(inventory)
 
     net_if_sold = profit = roi_pct = needed = max_buy = None
     if market_value_per_copy is not None:
@@ -520,3 +515,43 @@ def assess_cards(session: Session, *, owner: str = "") -> list[CardAssessment]:
         select(Inventory).where(Inventory.owner == owner).order_by(Inventory.card_id)
     ).all()
     return [assess_card(session, inv) for inv in inventories]
+
+
+def _exit_kwargs(inventory: Inventory) -> dict:
+    """Resale assumptions from an inventory row, in the shape the flip fee
+    functions expect. Promoted percent is stored as a percent, passed as a
+    fraction."""
+    return {
+        "buyer_shipping_paid": inventory.buyer_shipping_paid,
+        "seller_shipping_cost": inventory.seller_shipping_cost,
+        "supplies_cost": inventory.supplies_cost,
+        "promoted_listing_pct": (inventory.promoted_listing_pct or 0.0) / 100,
+    }
+
+
+def set_scanned_price(session: Session, card_id: int, price: float | None, *,
+                      owner: str = "", when: date | None = None) -> Inventory:
+    """Remember a scanned/entered price for a card so it can be graded against
+    market. Pass None to clear it."""
+    inventory = get_or_create_inventory(session, card_id, owner=owner)
+    inventory.scanned_price = price
+    inventory.scanned_at = (when or date.today()) if price is not None else None
+    session.add(inventory)
+    session.commit()
+    session.refresh(inventory)
+    return inventory
+
+
+def grade_scanned_card(session: Session, inventory: Inventory) -> "flip.BuyGrade | None":
+    """Grade the price saved on an inventory row against its current market
+    value. None when nothing has been scanned for the card yet. Uses the same
+    manual-first market value as everything else, so it starts working the
+    moment comps or a manual value exist."""
+    if inventory.scanned_price is None:
+        return None
+    market_value_per_copy, _ = effective_market_value(session, inventory)
+    target_roi = (inventory.target_roi_pct
+                  if inventory.target_roi_pct is not None
+                  else flip.DEFAULT_TARGET_ROI_PCT)
+    return flip.grade_buy(inventory.scanned_price, market_value_per_copy,
+                          target_roi_pct=target_roi, **_exit_kwargs(inventory))

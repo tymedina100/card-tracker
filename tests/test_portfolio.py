@@ -347,3 +347,39 @@ def test_assess_card_missing_market_is_flagged(session, sample_card):
     a = assess_card(session, inv)
     assert a.missing_market
     assert a.recommendation == Recommendation.MISSING_DATA
+
+
+def test_set_and_grade_scanned_price(session, sample_card):
+    from cardtracker.portfolio import (
+        grade_scanned_card,
+        set_market_inputs,
+        set_scanned_price,
+    )
+
+    # No scan yet -> nothing to grade.
+    inv = set_scanned_price(session, sample_card.id, 250.0)
+    assert inv.scanned_price == 250.0
+    assert inv.scanned_at is not None
+
+    # No market value yet -> grade is pending, but the price is remembered.
+    grade = grade_scanned_card(session, inv)
+    assert grade is not None and grade.is_pending
+
+    # Once a market value exists, the same scan grades on the scale.
+    set_market_inputs(session, sample_card.id, manual_market_value=400.0,
+                      target_roi_pct=20.0)
+    inv = session.exec(select(Inventory)).one()
+    graded = grade_scanned_card(session, inv)
+    assert graded is not None and not graded.is_pending
+    assert 0 <= graded.score <= 100
+    assert graded.rating in {"Great Buy", "Steal", "Good Buy"}
+
+
+def test_clear_scanned_price(session, sample_card):
+    from cardtracker.portfolio import grade_scanned_card, set_scanned_price
+
+    set_scanned_price(session, sample_card.id, 250.0)
+    inv = set_scanned_price(session, sample_card.id, None)
+    assert inv.scanned_price is None
+    assert inv.scanned_at is None
+    assert grade_scanned_card(session, inv) is None

@@ -7,12 +7,13 @@ Or directly: streamlit run src/cardtracker/dashboard.py
 
 import streamlit as st
 
-from cardtracker.webui import cards, data_tools, market, overview
+from cardtracker.webui import cards, data_tools, market, overview, scan
 from cardtracker.webui.shared import auth_configured
 from cardtracker.webui.theme import inject_global_style, sidebar_brand
 
 PAGES = {
     "Portfolio": (":material/account_balance_wallet:", overview.portfolio_page),
+    "Scan": (":material/qr_code_scanner:", scan.scan_page),
     "Cards": (":material/style:", cards.cards_page),
     "Card detail": (":material/search:", cards.card_detail_page),
     "Movers": (":material/trending_up:", market.movers_page),
