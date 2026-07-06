@@ -22,6 +22,7 @@ from cardtracker.models import (
 from cardtracker.portfolio import (
     avg_cost_per_copy,
     cost_basis_summary,
+    delete_card,
     get_or_create_inventory,
     log_buy,
     log_sell,
@@ -30,6 +31,14 @@ from cardtracker.portfolio import (
     unrealized_summary,
 )
 from cardtracker.predict import predict_card
+from cardtracker.reference import (
+    GRADES,
+    PARALLELS,
+    POKEMON_SETS,
+    POPULAR_CHARACTERS,
+    POPULAR_PLAYERS,
+    SPORTS_SETS,
+)
 from cardtracker.sources import BrowseApiSource, save_comps
 from cardtracker.stats import latest_snapshots, refresh_snapshots
 from cardtracker.webui.shared import (
@@ -37,6 +46,9 @@ from cardtracker.webui.shared import (
     SOLD_COLOR,
     card_label,
     card_picker,
+    combo,
+    current_owner,
+    distinct_values,
     fee_model,
     flash_and_rerun,
     get_settings,
@@ -50,11 +62,25 @@ from cardtracker.webui.shared import (
 def cards_page() -> None:
     show_flash()
     st.title("🗂️ Cards")
+    owner = current_owner()
     with open_session() as session:
-        cards = session.exec(select(Card).order_by(Card.id)).all()
-        comp_rows = session.exec(select(Comp.card_id, Comp.price_type)).all()
-        inventories = {inv.card_id: inv
-                       for inv in session.exec(select(Inventory)).all()}
+        cards = session.exec(
+            select(Card).where(Card.owner == owner).order_by(Card.id)
+        ).all()
+        card_ids = [card.id for card in cards]
+        comp_rows = (session.exec(
+            select(Comp.card_id, Comp.price_type)
+            .where(Comp.card_id.in_(card_ids))
+        ).all() if card_ids else [])
+        inventories = {
+            inv.card_id: inv for inv in session.exec(
+                select(Inventory).where(Inventory.owner == owner)
+            ).all()
+        }
+        used_players = distinct_values(session, Card.player_or_character, owner)
+        used_sets = distinct_values(session, Card.set_name, owner)
+        used_parallels = distinct_values(session, Card.variation_or_parallel, owner)
+        used_grades = distinct_values(session, Card.grade, owner)
     counts: dict[tuple[int, str], int] = defaultdict(int)
     for card_id, price_type in comp_rows:
         counts[(card_id, str(price_type))] += 1
@@ -64,16 +90,25 @@ def cards_page() -> None:
             c1, c2, c3 = st.columns(3)
             category = c1.selectbox("Category", [c.value for c in Category],
                                     key="add_category")
-            player = c2.text_input("Player or character", key="add_player")
-            set_name = c3.text_input("Set name", key="add_set")
+            with c2:
+                player = combo("Player or character",
+                               POPULAR_CHARACTERS + POPULAR_PLAYERS,
+                               used_players, key="add_player")
+            with c3:
+                set_name = combo("Set name", POKEMON_SETS + SPORTS_SETS,
+                                 used_sets, key="add_set")
             c4, c5, c6 = st.columns(3)
             year = c4.number_input("Year", 1900, 2100, 2024, key="add_year")
             number = c5.text_input("Card number", key="add_number")
-            parallel = c6.text_input("Variation or parallel", key="add_parallel")
+            with c6:
+                parallel = combo("Variation or parallel", PARALLELS,
+                                 used_parallels, key="add_parallel")
             c7, c8, c9 = st.columns(3)
             grader = c7.selectbox("Grader", [g.value for g in Grader],
                                   index=len(Grader) - 1, key="add_grader")
-            grade = c8.text_input("Grade (e.g. 10 or 9.5)", key="add_grade")
+            with c8:
+                grade = combo("Grade", GRADES, used_grades, key="add_grade",
+                              help="For raw cards leave blank.")
             cert = c9.text_input("Cert number", key="add_cert")
             notes = st.text_input("Notes", key="add_notes")
             if st.form_submit_button("Add card", type="primary"):
@@ -81,6 +116,7 @@ def cards_page() -> None:
                     st.error("Player/character and set name are required.")
                 else:
                     card = Card(
+                        owner=owner,
                         category=Category(category),
                         player_or_character=player.strip(),
                         set_name=set_name.strip(),
@@ -102,8 +138,25 @@ def cards_page() -> None:
         st.info("No cards yet. Add your first one above. A PSA 10 and a PSA 9 "
                 "of the same card are two separate cards.")
         return
+
+    f1, f2 = st.columns(2)
+    set_filter = f1.selectbox("Filter by set", ["All sets", *used_sets],
+                              key="cards_filter_set")
+    player_filter = f2.selectbox("Filter by player or character",
+                                 ["All players", *used_players],
+                                 key="cards_filter_player")
+    visible = [
+        card for card in cards
+        if (set_filter == "All sets" or card.set_name == set_filter)
+        and (player_filter == "All players"
+             or card.player_or_character == player_filter)
+    ]
+    if not visible:
+        st.caption("No cards match the current filters.")
+        return
+
     rows = []
-    for card in cards:
+    for card in visible:
         inventory = inventories.get(card.id)
         rows.append({
             "id": card.id,
@@ -159,8 +212,9 @@ def _price_history_chart(comps: list[Comp],
 def card_detail_page() -> None:
     show_flash()
     st.title("🔎 Card detail")
+    owner = current_owner()
     with open_session() as session:
-        card = card_picker(session, key="detail_card")
+        card = card_picker(session, owner, key="detail_card")
         if card is None:
             st.info("No cards yet. Add one in the Cards view first.")
             return
@@ -171,11 +225,12 @@ def card_detail_page() -> None:
             .order_by(PriceSnapshot.as_of_date)
         ).all()
         prediction = predict_card(session, card.id, log=False)
-        basis = cost_basis_summary(session, card_id=card.id)
-        holdings = [line for line in unrealized_summary(session, fee_model())
+        basis = cost_basis_summary(session, owner=owner, card_id=card.id)
+        holdings = [line for line in unrealized_summary(session, fee_model(),
+                                                        owner=owner)
                     if line.card.id == card.id]
         # viewing must not write rows; a pending Inventory still renders defaults
-        inventory = get_or_create_inventory(session, card.id)
+        inventory = get_or_create_inventory(session, card.id, owner=owner)
 
     st.subheader("Price history: ask vs sold")
     if comps:
@@ -263,7 +318,7 @@ def card_detail_page() -> None:
                                           buy_date=buy_date, fees=fees,
                                           shipping=shipping, taxes=taxes,
                                           grading=grading, platform=platform,
-                                          notes=notes)
+                                          notes=notes, owner=owner)
                 flash_and_rerun(f"Logged buy of one copy for a total cost of "
                                 f"{money(transaction.total_cost)}.")
 
@@ -291,8 +346,8 @@ def card_detail_page() -> None:
                 with open_session() as session:
                     log_sell(session, card.id, sale_price, sell_date=sell_date,
                              fees=sale_fees, shipping_cost=ship_cost,
-                             platform=sell_platform)
-                    cost = avg_cost_per_copy(session, card.id)
+                             platform=sell_platform, owner=owner)
+                    cost = avg_cost_per_copy(session, card.id, owner=owner)
                 net = sale_price - sale_fees - ship_cost
                 message = (f"Logged sell: net {money(net)} after fees "
                            f"{money(sale_fees)}.")
@@ -328,10 +383,10 @@ def card_detail_page() -> None:
                     set_status(session, card.id,
                                status=InventoryStatus(status),
                                quantity=int(quantity),
-                               listed_price=listed or None)
+                               listed_price=listed or None, owner=owner)
                     set_targets(session, card.id,
                                 target_sell_price=target or None,
-                                min_accept_price=min_accept or None)
+                                min_accept_price=min_accept or None, owner=owner)
                 flash_and_rerun("Status and targets saved.")
 
     with pull_tab, st.form("pull_comps"):
@@ -345,10 +400,66 @@ def card_detail_page() -> None:
                 records = source.fetch_comps(query, limit=limit)
                 with open_session() as session:
                     saved = save_comps(session, card.id, source, records)
-                    refresh_snapshots(session, card_id=card.id)
+                    refresh_snapshots(session, card_id=card.id, owner=owner)
                 flash_and_rerun(f"Saved {len(saved)} ask comps and refreshed "
                                 f"stats ({settings.ebay_env}).")
             except MissingCredentialsError as exc:
                 st.warning(str(exc))
             except Exception as exc:  # noqa: BLE001 surface eBay errors in the UI
                 st.error(f"eBay request failed: {exc}")
+
+    with st.expander("✏️ Edit or delete this card"):
+        with st.form("edit_card"):
+            categories = [c.value for c in Category]
+            graders = [g.value for g in Grader]
+            e1, e2, e3 = st.columns(3)
+            e_category = e1.selectbox("Category", categories,
+                                      index=categories.index(str(card.category)),
+                                      key="edit_category")
+            e_player = e2.text_input("Player or character",
+                                     value=card.player_or_character, key="edit_player")
+            e_set = e3.text_input("Set name", value=card.set_name, key="edit_set")
+            e4, e5, e6 = st.columns(3)
+            e_year = e4.number_input("Year", 1900, 2100, card.year, key="edit_year")
+            e_number = e5.text_input("Card number", value=card.card_number,
+                                     key="edit_number")
+            e_parallel = e6.text_input("Variation or parallel",
+                                       value=card.variation_or_parallel,
+                                       key="edit_parallel")
+            e7, e8, e9 = st.columns(3)
+            e_grader = e7.selectbox("Grader", graders,
+                                    index=graders.index(str(card.grader)),
+                                    key="edit_grader")
+            e_grade = e8.text_input("Grade", value=card.grade, key="edit_grade")
+            e_cert = e9.text_input("Cert number", value=card.cert_number or "",
+                                   key="edit_cert")
+            e_notes = st.text_input("Notes", value=card.notes, key="edit_notes")
+            if st.form_submit_button("Save changes", type="primary"):
+                if not e_player.strip() or not e_set.strip():
+                    st.error("Player/character and set name are required.")
+                else:
+                    with open_session() as session:
+                        db_card = session.get(Card, card.id)
+                        if db_card is not None and db_card.owner == owner:
+                            db_card.category = Category(e_category)
+                            db_card.player_or_character = e_player.strip()
+                            db_card.set_name = e_set.strip()
+                            db_card.year = int(e_year)
+                            db_card.card_number = e_number.strip()
+                            db_card.variation_or_parallel = e_parallel.strip()
+                            db_card.grader = Grader(e_grader)
+                            db_card.grade = e_grade.strip()
+                            db_card.cert_number = e_cert.strip() or None
+                            db_card.notes = e_notes.strip()
+                            session.add(db_card)
+                            session.commit()
+                    flash_and_rerun("Card updated.")
+
+        st.divider()
+        st.caption("Deleting removes this card and all of its comps, stats, buys, "
+                   "sells, and predictions. This cannot be undone.")
+        confirm = st.checkbox("I understand, delete this card", key="delete_confirm")
+        if st.button("🗑️ Delete card", disabled=not confirm, key="delete_card_btn"):
+            with open_session() as session:
+                delete_card(session, card.id, owner=owner)
+            flash_and_rerun("Card deleted.")

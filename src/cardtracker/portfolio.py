@@ -11,8 +11,34 @@ from datetime import date
 from sqlmodel import Session, select
 
 from cardtracker.fees import FeeModel, compute_net
-from cardtracker.models import Card, Inventory, InventoryStatus, Transaction, TransactionType
+from cardtracker.models import (
+    Card,
+    Comp,
+    Inventory,
+    InventoryStatus,
+    Prediction,
+    PriceSnapshot,
+    Transaction,
+    TransactionType,
+)
 from cardtracker.stats import latest_snapshots
+
+
+def delete_card(session: Session, card_id: int, *, owner: str = "") -> bool:
+    """Remove a card and everything hanging off it (comps, snapshots, buys and
+    sells, inventory, predictions). Scoped to the owner: returns False and does
+    nothing if the card is missing or belongs to someone else."""
+    card = session.exec(
+        select(Card).where(Card.id == card_id).where(Card.owner == owner)
+    ).first()
+    if card is None:
+        return False
+    for model in (Comp, PriceSnapshot, Prediction, Transaction, Inventory):
+        for row in session.exec(select(model).where(model.card_id == card_id)).all():
+            session.delete(row)
+    session.delete(card)
+    session.commit()
+    return True
 
 
 def market_value(session: Session, card_id: int) -> tuple[float, str, date] | None:
@@ -48,23 +74,27 @@ class CostBasisLine:
         return self.total_cost / self.copies if self.copies else 0.0
 
 
-def get_or_create_inventory(session: Session, card_id: int) -> Inventory:
+def get_or_create_inventory(session: Session, card_id: int, *, owner: str = "") -> Inventory:
     inventory = session.exec(
-        select(Inventory).where(Inventory.card_id == card_id)
+        select(Inventory)
+        .where(Inventory.card_id == card_id)
+        .where(Inventory.owner == owner)
     ).first()
     if inventory is None:
-        inventory = Inventory(card_id=card_id, quantity=0)
+        inventory = Inventory(card_id=card_id, owner=owner, quantity=0)
         session.add(inventory)
     return inventory
 
 
 def log_buy(session: Session, card_id: int, price: float, buy_date: date | None = None,
             fees: float = 0.0, shipping: float = 0.0, taxes: float = 0.0,
-            grading: float = 0.0, platform: str = "", notes: str = "") -> Transaction:
+            grading: float = 0.0, platform: str = "", notes: str = "", *,
+            owner: str = "") -> Transaction:
     """Record buying one copy. Creates the transaction and keeps the inventory
     row in sync: owned status, quantity, earliest acquired date, total cost basis."""
     transaction = Transaction(
         card_id=card_id,
+        owner=owner,
         type=TransactionType.BUY,
         date=buy_date or date.today(),
         price=price,
@@ -76,7 +106,7 @@ def log_buy(session: Session, card_id: int, price: float, buy_date: date | None 
         notes=notes,
     )
     session.add(transaction)
-    inventory = get_or_create_inventory(session, card_id)
+    inventory = get_or_create_inventory(session, card_id, owner=owner)
     inventory.status = InventoryStatus.OWNED
     inventory.quantity += 1
     if inventory.acquired_date is None or transaction.date < inventory.acquired_date:
@@ -115,13 +145,14 @@ class UnrealizedLine:
         return self.profit / self.cost_basis * 100
 
 
-def unrealized_summary(session: Session, fee_model: FeeModel,
+def unrealized_summary(session: Session, fee_model: FeeModel, *, owner: str = "",
                        shipping_cost: float = 0.0) -> list[UnrealizedLine]:
     """Profit if sold now for every held card (owned or listed, quantity > 0):
     market stat minus fees minus cost basis. Cards without snapshots get a line
     with no market value so they are visible rather than silently dropped."""
     holdings = session.exec(
         select(Inventory)
+        .where(Inventory.owner == owner)
         .where(Inventory.quantity > 0)
         .where(Inventory.status.in_((InventoryStatus.OWNED, InventoryStatus.LISTED)))
         .order_by(Inventory.card_id)
@@ -148,11 +179,12 @@ def unrealized_summary(session: Session, fee_model: FeeModel,
 
 def log_sell(session: Session, card_id: int, price: float, sell_date: date | None = None,
              fees: float = 0.0, shipping_cost: float = 0.0, platform: str = "",
-             notes: str = "") -> Transaction:
+             notes: str = "", *, owner: str = "") -> Transaction:
     """Record selling one copy with actual sale price and actual fees. Inventory
     quantity drops by one; status flips to sold when nothing is left."""
     transaction = Transaction(
         card_id=card_id,
+        owner=owner,
         type=TransactionType.SELL,
         date=sell_date or date.today(),
         price=price,
@@ -162,7 +194,7 @@ def log_sell(session: Session, card_id: int, price: float, sell_date: date | Non
         notes=notes,
     )
     session.add(transaction)
-    inventory = get_or_create_inventory(session, card_id)
+    inventory = get_or_create_inventory(session, card_id, owner=owner)
     inventory.quantity = max(0, inventory.quantity - 1)
     if inventory.quantity == 0:
         inventory.status = InventoryStatus.SOLD
@@ -172,10 +204,11 @@ def log_sell(session: Session, card_id: int, price: float, sell_date: date | Non
     return transaction
 
 
-def avg_cost_per_copy(session: Session, card_id: int) -> float | None:
+def avg_cost_per_copy(session: Session, card_id: int, *, owner: str = "") -> float | None:
     """Average total buy cost across all copies of a card ever bought."""
     buys = session.exec(
         select(Transaction)
+        .where(Transaction.owner == owner)
         .where(Transaction.type == TransactionType.BUY)
         .where(Transaction.card_id == card_id)
     ).all()
@@ -211,10 +244,13 @@ class RealizedLine:
         return self.profit / self.cost_allocated * 100
 
 
-def realized_summary(session: Session, card_id: int | None = None) -> list[RealizedLine]:
+def realized_summary(session: Session, *, owner: str = "",
+                     card_id: int | None = None) -> list[RealizedLine]:
     """Realized P&L across all logged sells. Cost is allocated per copy as the
     average buy cost for that card; sells with no logged buy show no profit."""
-    query = select(Transaction).where(Transaction.type == TransactionType.SELL)
+    query = (select(Transaction)
+             .where(Transaction.owner == owner)
+             .where(Transaction.type == TransactionType.SELL))
     if card_id is not None:
         query = query.where(Transaction.card_id == card_id)
     sells = session.exec(query.order_by(Transaction.date)).all()
@@ -222,7 +258,7 @@ def realized_summary(session: Session, card_id: int | None = None) -> list[Reali
     lines = []
     for sell in sells:
         if sell.card_id not in costs:
-            costs[sell.card_id] = avg_cost_per_copy(session, sell.card_id)
+            costs[sell.card_id] = avg_cost_per_copy(session, sell.card_id, owner=owner)
         lines.append(RealizedLine(
             card=session.get(Card, sell.card_id),
             sale_date=sell.date,
@@ -236,9 +272,10 @@ def realized_summary(session: Session, card_id: int | None = None) -> list[Reali
 
 
 def set_status(session: Session, card_id: int, status: InventoryStatus | None = None,
-               quantity: int | None = None, listed_price: float | None = None) -> Inventory:
+               quantity: int | None = None, listed_price: float | None = None, *,
+               owner: str = "") -> Inventory:
     """Update inventory status, quantity, or listed price for a card."""
-    inventory = get_or_create_inventory(session, card_id)
+    inventory = get_or_create_inventory(session, card_id, owner=owner)
     if status is not None:
         inventory.status = status
     if quantity is not None:
@@ -252,9 +289,9 @@ def set_status(session: Session, card_id: int, status: InventoryStatus | None = 
 
 
 def set_targets(session: Session, card_id: int, target_sell_price: float | None = None,
-                min_accept_price: float | None = None) -> Inventory:
+                min_accept_price: float | None = None, *, owner: str = "") -> Inventory:
     """Store target sell price and minimum acceptable price for a card."""
-    inventory = get_or_create_inventory(session, card_id)
+    inventory = get_or_create_inventory(session, card_id, owner=owner)
     if target_sell_price is not None:
         inventory.target_sell_price = target_sell_price
     if min_accept_price is not None:
@@ -273,11 +310,13 @@ class InventoryLine:
     market_price_type: str | None
 
 
-def inventory_view(session: Session,
-                   status: InventoryStatus | None = None) -> list[InventoryLine]:
+def inventory_view(session: Session, status: InventoryStatus | None = None, *,
+                   owner: str = "") -> list[InventoryLine]:
     """All inventory rows, optionally filtered by status, with the current
     market stat alongside so targets can be judged at a glance."""
-    query = select(Inventory).order_by(Inventory.card_id)
+    query = (select(Inventory)
+             .where(Inventory.owner == owner)
+             .order_by(Inventory.card_id))
     if status is not None:
         query = query.where(Inventory.status == status)
     rows = session.exec(query).all()
@@ -293,9 +332,12 @@ def inventory_view(session: Session,
     return lines
 
 
-def cost_basis_summary(session: Session, card_id: int | None = None) -> list[CostBasisLine]:
+def cost_basis_summary(session: Session, *, owner: str = "",
+                       card_id: int | None = None) -> list[CostBasisLine]:
     """Per-card cost basis built from buy transactions."""
-    query = select(Transaction).where(Transaction.type == TransactionType.BUY)
+    query = (select(Transaction)
+             .where(Transaction.owner == owner)
+             .where(Transaction.type == TransactionType.BUY))
     if card_id is not None:
         query = query.where(Transaction.card_id == card_id)
     buys = session.exec(query).all()

@@ -18,6 +18,26 @@ def _default_db_path() -> str:
     return str(PROJECT_ROOT / "data" / "cardtracker.db")
 
 
+def normalize_database_url(url: str) -> str:
+    """Rewrite a Postgres URL to use the psycopg 3 driver.
+
+    Railway (and most hosts) hand out URLs like 'postgres://...' or
+    'postgresql://...', which SQLAlchemy would route to the psycopg2 driver.
+    We ship psycopg 3, so force the '+psycopg' driver. Non-Postgres URLs
+    (for example a sqlite:/// path) are returned unchanged."""
+    url = url.strip()
+    if not url:
+        return ""
+    for prefix in ("postgresql+psycopg://", "postgresql+psycopg2://"):
+        if url.startswith(prefix):
+            return url
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
+
 @dataclass
 class Settings:
     ebay_client_id: str = ""
@@ -25,6 +45,7 @@ class Settings:
     ebay_env: str = "sandbox"
     ebay_marketplace_id: str = "EBAY_US"
     insights_enabled: bool = False
+    database_url: str = ""
     db_path: str = field(default_factory=_default_db_path)
     fee_final_value_pct: float = 13.25
     fee_per_order: float = 0.30
@@ -72,6 +93,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         ebay_env=ebay_env,
         ebay_marketplace_id=os.getenv("EBAY_MARKETPLACE_ID", "EBAY_US").strip(),
         insights_enabled=os.getenv("INSIGHTS_ENABLED", "").strip().lower() in ("1", "true", "yes"),
+        database_url=normalize_database_url(os.getenv("DATABASE_URL", "")),
         db_path=os.getenv("DB_PATH", "").strip() or _default_db_path(),
         fee_final_value_pct=_env_float("FEE_FINAL_VALUE_PCT", 13.25),
         fee_per_order=_env_float("FEE_PER_ORDER", 0.30),

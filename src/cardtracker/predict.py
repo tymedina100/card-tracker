@@ -69,10 +69,12 @@ def _parallel_similar(a: Card, b: Card) -> bool:
 
 def find_cohort(session: Session, card: Card) -> list[Card]:
     """Comparable cards: same player or character, set, and year, with a nearby
-    grade and the same or a base parallel."""
+    grade and the same or a base parallel. Scoped to the card's owner so one
+    user's collection never leaks into another user's cohort."""
     candidates = session.exec(
         select(Card).where(
             Card.id != card.id,
+            Card.owner == card.owner,
             func.lower(Card.player_or_character) == card.player_or_character.lower(),
             func.lower(Card.set_name) == card.set_name.lower(),
             Card.year == card.year,
@@ -168,7 +170,7 @@ def predict_card(session: Session, card_id: int, as_of: date | None = None,
             horizon_days=horizon_days,
         )
         if log:
-            _log_prediction(session, result)
+            _log_prediction(session, result, owner=card.owner)
         return result
 
     signals = ([own] if own else []) + cohort_signals
@@ -229,13 +231,15 @@ def predict_card(session: Session, card_id: int, as_of: date | None = None,
         horizon_days=horizon_days,
     )
     if log:
-        _log_prediction(session, result)
+        _log_prediction(session, result, owner=card.owner)
     return result
 
 
-def _log_prediction(session: Session, result: PredictionResult) -> Prediction:
+def _log_prediction(session: Session, result: PredictionResult, *,
+                    owner: str) -> Prediction:
     stale = session.exec(
         select(Prediction)
+        .where(Prediction.owner == owner)
         .where(Prediction.card_id == result.card_id)
         .where(Prediction.as_of_date == result.as_of)
         .where(Prediction.horizon_days == result.horizon_days)
@@ -244,6 +248,7 @@ def _log_prediction(session: Session, result: PredictionResult) -> Prediction:
         session.delete(row)
     prediction = Prediction(
         card_id=result.card_id,
+        owner=owner,
         as_of_date=result.as_of,
         predicted_direction=result.direction,
         confidence=result.confidence,
@@ -312,13 +317,17 @@ class BacktestReport:
 
 
 def backtest(session: Session, horizon_days: int = 30, step_days: int = 7,
-             min_history_days: int = 30, card_id: int | None = None) -> BacktestReport:
+             min_history_days: int = 30, card_id: int | None = None,
+             owner: str | None = None) -> BacktestReport:
     """Replay history: predict at past dates using only comps up to each date,
     then score against the sold median that followed. Keeps the model honest.
-    Backtest predictions are not written to the predictions table."""
+    Backtest predictions are not written to the predictions table. When owner is
+    given, only that owner's cards are replayed."""
     card_query = select(Card)
     if card_id is not None:
         card_query = card_query.where(Card.id == card_id)
+    if owner is not None:
+        card_query = card_query.where(Card.owner == owner)
     cards = session.exec(card_query).all()
     rows: list[BacktestRow] = []
     for card in cards:
@@ -348,13 +357,16 @@ def backtest(session: Session, horizon_days: int = 30, step_days: int = 7,
     return BacktestReport(horizon_days=horizon_days, step_days=step_days, rows=rows)
 
 
-def score_due_predictions(session: Session, today: date | None = None) -> int:
+def score_due_predictions(session: Session, today: date | None = None,
+                          owner: str | None = None) -> int:
     """Fill realized_direction and was_correct on logged predictions whose
-    horizon has elapsed. Returns how many rows were scored."""
+    horizon has elapsed. Returns how many rows were scored. When owner is given,
+    only that owner's predictions are scored."""
     today = today or date.today()
-    pending = session.exec(
-        select(Prediction).where(Prediction.realized_direction == None)  # noqa: E711
-    ).all()
+    query = select(Prediction).where(Prediction.realized_direction == None)  # noqa: E711
+    if owner is not None:
+        query = query.where(Prediction.owner == owner)
+    pending = session.exec(query).all()
     frames: dict[int, pd.DataFrame] = {}
     scored = 0
     for prediction in pending:

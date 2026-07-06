@@ -1,7 +1,8 @@
 # cardtracker
 
-Local price comp tracker and value predictor for sports and Pokemon cards.
-Runs entirely on your machine: SQLite database, no paid infrastructure.
+Price comp tracker and value predictor for sports and Pokemon cards. Runs
+locally against SQLite for a single user, or hosted on Railway with Postgres
+and Google sign-in so many people can each keep a private collection.
 
 ## Status
 
@@ -9,7 +10,8 @@ Complete. Cards, comp ingestion (Browse API asks, CSV solds), rolling
 market stats with scheduled refresh, an explainable comparable-cohort
 prediction engine with backtesting, the full money toolkit (cost basis,
 net-after-fees calculator, unrealized and realized P&L, deal analyzer with
-max buy price, inventory status, price targets), and a Streamlit dashboard.
+max buy price, inventory status, price targets), and a Streamlit dashboard
+with popular-value dropdowns, per-account data isolation, and Google sign-in.
 
 ## Dashboard
 
@@ -44,37 +46,40 @@ you click the log button, and viewing a card does not create rows. The
 CLI still exists and does everything the dashboard does, for scripting
 and scheduled refreshes.
 
-## Deploying the dashboard to Streamlit Community Cloud
+## Deploying to Railway (multi-user, durable)
 
-The dashboard can be hosted for free at share.streamlit.io so it is reachable
-from a browser without installing anything locally. Three things to know
-before doing this:
+Hosted on Railway the app has durable Postgres storage and Google sign-in, so
+each visitor signs in and sees only their own collection. Data survives
+redeploys and app restarts.
 
-- The hosted dashboard is fully usable in the browser: visitors can add
-  cards, log buys and sells, import CSVs, and run every calculator.
-- However, Streamlit Community Cloud's free tier has ephemeral storage.
-  The SQLite file is wiped on redeploys and when the app sleeps and wakes
-  from inactivity, so anything entered on the hosted site will eventually
-  disappear. Treat a hosted instance as a demo or sandbox, and keep the
-  real collection in a local install where the database is a durable file
-  on disk.
-- Everyone visiting the hosted URL shares one database. There are no
-  accounts; two people tracking different collections should each run
-  their own copy instead.
+1. Push this repository to GitHub.
+2. In Railway, create a project from the repo, then add a Postgres plugin.
+   Railway injects `DATABASE_URL` into the app service automatically; the app
+   rewrites the URL to use the psycopg 3 driver and creates its tables on
+   first boot.
+3. Create a Google OAuth client at
+   https://console.cloud.google.com > APIs & Services > Credentials > OAuth
+   client ID (type: Web application). Add
+   `https://YOUR-APP.up.railway.app/oauth2callback` as an authorized redirect
+   URI. Copy the client id and secret.
+4. Set these variables on the Railway app service (Variables tab):
+   - `AUTH_REDIRECT_URI` = `https://YOUR-APP.up.railway.app/oauth2callback`
+   - `AUTH_COOKIE_SECRET` = any long random string
+     (`python -c "import secrets;print(secrets.token_hex(32))"`)
+   - `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from step 3
+   - Optionally `EBAY_CLIENT_ID` / `EBAY_CLIENT_SECRET` for live Browse pulls.
+5. Railway starts the app from the `Procfile`
+   (`streamlit run streamlit_app.py --server.port $PORT ...`). Open the URL and
+   sign in with Google.
 
-Steps:
+Auth secrets are written to `.streamlit/secrets.toml` at startup from those
+variables and are never committed. If the four `AUTH_*`/`GOOGLE_*` variables are
+not all set, the app runs in open local single-owner mode (no login screen),
+which is what you get running locally.
 
-1. Push this repository to GitHub (already done if you are reading this
-   from github.com/tymedina100/card-tracker).
-2. At share.streamlit.io, create a new app from that repository.
-3. Set the main file path to `streamlit_app.py`.
-4. Leave eBay keys unset unless you want live Browse API pulls to work in
-   the hosted app; CSV-imported data and everything else works without
-   them. To set them, use the app's Secrets manager in Streamlit Cloud
-   settings (same variable names as `.env.example`), not a committed
-   `.env` file.
-5. Deploy. The app installs from `requirements.txt`, which installs this
-   package in editable mode and pulls in every dependency.
+The old Streamlit Community Cloud path still works for a throwaway demo, but its
+free tier has ephemeral storage and one shared database, so use Railway for a
+real deployment.
 
 ## Setup
 

@@ -33,6 +33,16 @@ def fresh_streamlit_caches():
     st.cache_resource.clear()
 
 
+TEST_OWNER = "local"
+
+
+@pytest.fixture(autouse=True)
+def pin_owner(monkeypatch):
+    """Pin the signed-in identity so current_owner() is deterministic in tests
+    (no Google sign-in) and matches the owner seeded data is created under."""
+    monkeypatch.setenv("CARDTRACKER_OWNER", TEST_OWNER)
+
+
 @pytest.fixture
 def seeded_db(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "dash.db"))
@@ -41,9 +51,9 @@ def seeded_db(tmp_path, monkeypatch):
     init_db(engine)
     today = date.today()
     with get_session(engine) as session:
-        card = Card(category=Category.POKEMON, player_or_character="Charizard",
-                    set_name="Base Set", year=1999, card_number="4",
-                    grader=Grader.PSA, grade="9")
+        card = Card(owner=TEST_OWNER, category=Category.POKEMON,
+                    player_or_character="Charizard", set_name="Base Set",
+                    year=1999, card_number="4", grader=Grader.PSA, grade="9")
         session.add(card)
         session.commit()
         session.refresh(card)
@@ -59,9 +69,11 @@ def seeded_db(tmp_path, monkeypatch):
                           title_raw="cheap ask", listing_url="https://ebay.com/itm/1"))
         session.add_all(comps)
         session.commit()
-        log_buy(session, card.id, price=280.0, buy_date=today - timedelta(days=60))
-        set_targets(session, card.id, target_sell_price=380.0, min_accept_price=330.0)
-        refresh_snapshots(session)
+        log_buy(session, card.id, price=280.0, buy_date=today - timedelta(days=60),
+                owner=TEST_OWNER)
+        set_targets(session, card.id, target_sell_price=380.0,
+                    min_accept_price=330.0, owner=TEST_OWNER)
+        refresh_snapshots(session, owner=TEST_OWNER)
     return card
 
 
@@ -128,8 +140,9 @@ class TestForms:
     def test_add_card_form(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DB_PATH", str(tmp_path / "forms.db"))
         at = run_view("Cards")
-        at.text_input(key="add_player").set_value("Pikachu")
-        at.text_input(key="add_set").set_value("Jungle")
+        # player and set are now curated dropdowns; these values are curated options
+        at.selectbox(key="add_player").set_value("Pikachu")
+        at.selectbox(key="add_set").set_value("Jungle")
         at.number_input(key="add_year").set_value(1999)
         submit(at, "Add card")
         assert "Added card" in success_text(at)
@@ -193,6 +206,27 @@ class TestForms:
         at = run_view("Card detail")
         submit(at, "📌 Log this prediction for scoring")
         assert "Prediction logged" in success_text(at)
+
+
+class TestManageCard:
+    def test_delete_card(self, seeded_db):
+        at = run_view("Card detail")
+        at.checkbox(key="delete_confirm").set_value(True).run()
+        submit(at, "🗑️ Delete card")
+        assert "deleted" in success_text(at).lower()
+        at2 = run_view("Cards")
+        assert not at2.dataframe  # collection is empty again
+
+    def test_edit_card_updates_fields(self, seeded_db):
+        at = run_view("Card detail")
+        at.text_input(key="edit_notes").set_value("gem mint corners")
+        submit(at, "Save changes")
+        assert "updated" in success_text(at).lower()
+
+    def test_export_button_present(self, seeded_db):
+        at = run_view("Data")
+        headers = " ".join(h.value for h in at.subheader)
+        assert "Export my collection" in headers
 
 
 class TestCalculators:

@@ -11,6 +11,7 @@ from cardtracker.webui.shared import (
     GOLD,
     all_cards,
     card_label,
+    current_owner,
     fee_model,
     open_session,
     show_flash,
@@ -22,8 +23,9 @@ def movers_page() -> None:
     show_flash()
     st.title("📈 Movers")
     horizon = st.slider("Horizon (days)", 7, 90, 30, step=1, key="movers_horizon")
+    owner = current_owner()
     with open_session() as session:
-        cards = all_cards(session)
+        cards = all_cards(session, owner)
         if not cards:
             st.info("No cards yet. Add one in the Cards view.")
             return
@@ -61,7 +63,8 @@ def deals_page() -> None:
                                       0.0, step=0.5, key="deals_shipping")
     with open_session() as session:
         deals = find_deals(session, fee_model(), target_roi_pct=float(target_roi),
-                           days=days, shipping_cost=shipping_cost)
+                           days=days, shipping_cost=shipping_cost,
+                           owner=current_owner())
     if not deals:
         st.info(f"No active listings under max buy price at {target_roi}% target "
                 "ROI. Pull fresh asks from a card's detail page.")
@@ -90,7 +93,8 @@ def accuracy_page() -> None:
     horizon = col1.slider("Horizon (days)", 7, 90, 30, step=1, key="acc_horizon")
     step = col2.slider("Replay step (days)", 1, 30, 7, key="acc_step")
     with open_session() as session:
-        report = backtest(session, horizon_days=horizon, step_days=step)
+        report = backtest(session, horizon_days=horizon, step_days=step,
+                          owner=current_owner())
     if not report.scored:
         st.info("Nothing scorable yet. Backtesting needs sold comps spanning at "
                 f"least {30 + horizon} days for a card.")

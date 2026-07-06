@@ -227,6 +227,43 @@ class TestInventoryAndTargets:
         assert line.market_price_type == "sold"
 
 
+def test_delete_card_removes_card_and_dependents(session, sample_card):
+    from cardtracker.models import (
+        Card,
+        Comp,
+        CompSourceName,
+        PredictedDirection,
+        Prediction,
+        PriceSnapshot,
+        PriceType,
+    )
+    from cardtracker.portfolio import delete_card
+
+    log_buy(session, sample_card.id, price=100.0)
+    session.add(Comp(card_id=sample_card.id, source=CompSourceName.CSV,
+                     price_type=PriceType.SOLD, price=1.0,
+                     sold_date_or_seen_date=date(2026, 6, 1)))
+    session.add(PriceSnapshot(card_id=sample_card.id, as_of_date=date(2026, 7, 1),
+                              price_type=PriceType.SOLD, median_30d=1.0))
+    session.add(Prediction(card_id=sample_card.id, as_of_date=date(2026, 7, 1),
+                           predicted_direction=PredictedDirection.UP, confidence=0.5))
+    session.commit()
+
+    assert delete_card(session, sample_card.id) is True
+    assert session.get(Card, sample_card.id) is None
+    assert session.exec(select(Comp)).all() == []
+    assert session.exec(select(PriceSnapshot)).all() == []
+    assert session.exec(select(Prediction)).all() == []
+    assert session.exec(select(Transaction)).all() == []
+    assert session.exec(select(Inventory)).all() == []
+
+
+def test_delete_missing_card_returns_false(session, sample_card):
+    from cardtracker.portfolio import delete_card
+
+    assert delete_card(session, 9999) is False
+
+
 def test_migration_adds_new_columns(tmp_path):
     import sqlite3
 

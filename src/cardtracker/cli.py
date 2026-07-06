@@ -1,5 +1,6 @@
 """Command line interface for cardtracker."""
 
+import os
 from collections import defaultdict
 from pathlib import Path
 from typing import Annotated
@@ -16,6 +17,11 @@ from cardtracker.stats import latest_snapshots, refresh_snapshots
 
 app = typer.Typer(help="Track card price comps and market stats.", no_args_is_help=True)
 
+# The CLI is single-user: everything it creates or reads belongs to one owner.
+# Override with CARDTRACKER_OWNER to keep a CLI collection separate from others
+# in a shared database.
+OWNER = os.getenv("CARDTRACKER_OWNER", "local")
+
 
 def _engine():
     settings = load_settings()
@@ -26,7 +32,7 @@ def _engine():
 
 def _get_card_or_exit(session, card_id: int) -> Card:
     card = session.get(Card, card_id)
-    if card is None:
+    if card is None or card.owner != OWNER:
         typer.secho(f"No card with id {card_id}. Run 'cardtracker list-cards'.", fg="red")
         raise typer.Exit(code=1)
     return card
@@ -55,6 +61,7 @@ def add_card(
     """Add a card identity. A PSA 10 and a PSA 9 of the same card are two cards."""
     _, engine = _engine()
     card = Card(
+        owner=OWNER,
         category=category,
         player_or_character=player,
         set_name=set_name,
@@ -81,11 +88,16 @@ def list_cards() -> None:
     """List all cards with comp counts."""
     _, engine = _engine()
     with get_session(engine) as session:
-        cards = session.exec(select(Card).order_by(Card.id)).all()
+        cards = session.exec(
+            select(Card).where(Card.owner == OWNER).order_by(Card.id)
+        ).all()
         if not cards:
             typer.echo("No cards yet. Add one with 'cardtracker add-card'.")
             return
-        comps = session.exec(select(Comp.card_id, Comp.price_type)).all()
+        card_ids = [card.id for card in cards]
+        comps = session.exec(
+            select(Comp.card_id, Comp.price_type).where(Comp.card_id.in_(card_ids))
+        ).all()
         counts: dict[tuple[int, str], int] = defaultdict(int)
         for card_id, price_type in comps:
             counts[(card_id, price_type)] += 1
@@ -162,7 +174,7 @@ def refresh_stats(
     with get_session(engine) as session:
         if card_id is not None:
             _get_card_or_exit(session, card_id)
-        written = refresh_snapshots(session, card_id=card_id)
+        written = refresh_snapshots(session, card_id=card_id, owner=OWNER)
     typer.secho(f"Wrote {len(written)} snapshot(s)", fg="green")
 
 
@@ -281,7 +293,8 @@ def log_buy_command(
         card = _get_card_or_exit(session, card_id)
         transaction = log_buy(session, card_id, price, buy_date=parsed_date,
                               fees=fees, shipping=shipping, taxes=taxes,
-                              grading=grading, platform=platform, notes=notes)
+                              grading=grading, platform=platform, notes=notes,
+                              owner=OWNER)
         typer.secho(
             f"Logged buy of card {card_id} ({_describe(card)}) on {transaction.date}: "
             f"total cost {transaction.total_cost:,.2f} "
@@ -302,7 +315,7 @@ def cost_basis_command(
     with get_session(engine) as session:
         if card_id is not None:
             _get_card_or_exit(session, card_id)
-        lines = cost_basis_summary(session, card_id=card_id)
+        lines = cost_basis_summary(session, owner=OWNER, card_id=card_id)
         if not lines:
             typer.echo("No buys logged yet. Record one with 'cardtracker log-buy'.")
             return
@@ -368,8 +381,8 @@ def log_sell_command(
             typer.echo(f"Estimated fees from fee model: {fees:,.2f}")
         transaction = log_sell(session, card_id, price, sell_date=parsed_date,
                                fees=fees, shipping_cost=shipping_cost,
-                               platform=platform, notes=notes)
-        cost = avg_cost_per_copy(session, card_id)
+                               platform=platform, notes=notes, owner=OWNER)
+        cost = avg_cost_per_copy(session, card_id, owner=OWNER)
         net = price - fees - shipping_cost
         typer.secho(f"Logged sell of card {card_id} ({_describe(card)}) on "
                     f"{transaction.date}: net {net:,.2f} after fees {fees:,.2f} "
@@ -394,7 +407,7 @@ def realized_command(
     with get_session(engine) as session:
         if card_id is not None:
             _get_card_or_exit(session, card_id)
-        lines = realized_summary(session, card_id=card_id)
+        lines = realized_summary(session, owner=OWNER, card_id=card_id)
         if not lines:
             typer.echo("No sells logged yet. Record one with 'cardtracker log-sell'.")
             return
@@ -431,7 +444,7 @@ def unrealized_command(
     settings, engine = _engine()
     with get_session(engine) as session:
         lines = unrealized_summary(session, FeeModel.from_settings(settings),
-                                   shipping_cost=shipping_cost)
+                                   owner=OWNER, shipping_cost=shipping_cost)
         if not lines:
             typer.echo("No held cards. Log a buy first with 'cardtracker log-buy'.")
             return
@@ -501,7 +514,8 @@ def set_status_command(
     with get_session(engine) as session:
         card = _get_card_or_exit(session, card_id)
         inventory = set_status(session, card_id, status=parsed_status,
-                               quantity=quantity, listed_price=listed_price)
+                               quantity=quantity, listed_price=listed_price,
+                               owner=OWNER)
         listed = (f", listed at {inventory.listed_price:,.2f}"
                   if inventory.listed_price else "")
         typer.secho(f"Card {card_id} ({_describe(card)}): {inventory.status}, "
@@ -528,7 +542,7 @@ def inventory_command(
                         f"got '{status}'", fg="red")
             raise typer.Exit(code=1) from None
     with get_session(engine) as session:
-        lines = inventory_view(session, status=parsed_status)
+        lines = inventory_view(session, status=parsed_status, owner=OWNER)
         if not lines:
             typer.echo("No inventory rows match. Track a card with "
                        "'cardtracker set-status' or 'cardtracker log-buy'.")
@@ -576,7 +590,7 @@ def set_targets_command(
     with get_session(engine) as session:
         card = _get_card_or_exit(session, card_id)
         inventory = set_targets(session, card_id, target_sell_price=target,
-                                min_accept_price=min_accept)
+                                min_accept_price=min_accept, owner=OWNER)
         target_text = (f"{inventory.target_sell_price:,.2f}"
                        if inventory.target_sell_price else "unset")
         min_text = (f"{inventory.min_accept_price:,.2f}"
@@ -592,7 +606,7 @@ def targets_command() -> None:
 
     _, engine = _engine()
     with get_session(engine) as session:
-        lines = [line for line in inventory_view(session)
+        lines = [line for line in inventory_view(session, owner=OWNER)
                  if line.inventory.target_sell_price or line.inventory.min_accept_price]
         if not lines:
             typer.echo("No targets set. Use 'cardtracker set-targets'.")
@@ -695,7 +709,7 @@ def deals_command(
     with get_session(engine) as session:
         deals = find_deals(session, FeeModel.from_settings(settings),
                            target_roi_pct=target_roi, days=days,
-                           shipping_cost=shipping_cost)
+                           shipping_cost=shipping_cost, owner=OWNER)
         if not deals:
             typer.echo(f"No deals found at {target_roi:.0f}% target ROI among asks "
                        f"seen in the last {days} days. Pull fresh asks with "
@@ -761,7 +775,7 @@ def backtest_command(
         if card_id is not None:
             _get_card_or_exit(session, card_id)
         report = backtest(session, horizon_days=horizon_days, step_days=step_days,
-                          card_id=card_id)
+                          card_id=card_id, owner=OWNER)
     typer.echo(f"Backtest: {horizon_days} day horizon, replayed every {step_days} day(s)")
     if not report.scored:
         typer.echo("Nothing scorable. Backtesting needs sold comps spanning at least "
@@ -782,7 +796,7 @@ def score_predictions_command() -> None:
 
     _, engine = _engine()
     with get_session(engine) as session:
-        scored = score_due_predictions(session)
+        scored = score_due_predictions(session, owner=OWNER)
     typer.secho(f"Scored {scored} prediction(s)", fg="green")
 
 
