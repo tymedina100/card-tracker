@@ -10,6 +10,7 @@ from datetime import date
 
 from sqlmodel import Session, select
 
+from cardtracker import flip
 from cardtracker.fees import FeeModel, compute_net
 from cardtracker.models import (
     Card,
@@ -302,6 +303,37 @@ def set_targets(session: Session, card_id: int, target_sell_price: float | None 
     return inventory
 
 
+def set_market_inputs(session: Session, card_id: int, *, owner: str = "",
+                      manual_market_value: float | None = None,
+                      last_sold_price: float | None = None,
+                      lowest_active_ask: float | None = None,
+                      target_roi_pct: float | None = None,
+                      date_listed: date | None = None,
+                      supplies_cost: float | None = None,
+                      buyer_shipping_paid: float | None = None,
+                      seller_shipping_cost: float | None = None,
+                      promoted_listing_pct: float | None = None) -> Inventory:
+    """Persist the hand-entered market values and exit assumptions for a card.
+
+    Each argument overwrites the stored value, so pass the current value to keep
+    it and ``None`` to clear it. These feed effective_market_value and the whole
+    recommendation engine."""
+    inventory = get_or_create_inventory(session, card_id, owner=owner)
+    inventory.manual_market_value = manual_market_value
+    inventory.last_sold_price = last_sold_price
+    inventory.lowest_active_ask = lowest_active_ask
+    inventory.target_roi_pct = target_roi_pct
+    inventory.date_listed = date_listed
+    inventory.supplies_cost = supplies_cost
+    inventory.buyer_shipping_paid = buyer_shipping_paid
+    inventory.seller_shipping_cost = seller_shipping_cost
+    inventory.promoted_listing_pct = promoted_listing_pct
+    session.add(inventory)
+    session.commit()
+    session.refresh(inventory)
+    return inventory
+
+
 @dataclass
 class InventoryLine:
     inventory: Inventory
@@ -357,3 +389,134 @@ def cost_basis_summary(session: Session, *, owner: str = "",
             grading_total=sum(b.grading_cost for b in card_buys),
         ))
     return lines
+
+
+def effective_market_value(session: Session,
+                           inventory: Inventory) -> tuple[float | None, str | None]:
+    """Best available per-copy market value for a card, and where it came from.
+
+    Priority, so hand-entered numbers win while automatic comps stay a fallback:
+    manual market value -> latest sold/ask snapshot median -> last sold price ->
+    lowest active ask. Returns (None, None) when nothing is known.
+    """
+    if inventory.manual_market_value is not None:
+        return inventory.manual_market_value, "manual"
+    snapshot = market_value(session, inventory.card_id)
+    if snapshot is not None:
+        return snapshot[0], snapshot[1]  # (value, 'sold'|'ask')
+    if inventory.last_sold_price is not None:
+        return inventory.last_sold_price, "last sold"
+    if inventory.lowest_active_ask is not None:
+        return inventory.lowest_active_ask, "ask"
+    return None, None
+
+
+@dataclass
+class CardAssessment:
+    """One card's full flip picture: what it cost, what it's worth, what you'd
+    net after fees, and what to do about it. Reused by the Portfolio and Cards
+    pages and the Card detail summary so every view shows the same numbers."""
+
+    card: Card
+    inventory: Inventory
+    status: str
+    quantity: int
+    cost_basis: float                 # total across held copies
+    cost_per_copy: float | None
+    market_value: float | None        # per copy
+    market_source: str | None
+    net_if_sold: float | None         # net proceeds for all held copies
+    profit: float | None
+    roi_pct: float | None
+    target_roi_pct: float
+    needed_sale_price: float | None   # per copy, to hit target ROI
+    max_buy: float | None             # per copy, for watch-list buy decisions
+    recommendation: flip.Recommendation
+    reason: str
+
+    @property
+    def is_underwater(self) -> bool:
+        return self.profit is not None and self.profit < 0
+
+    @property
+    def missing_market(self) -> bool:
+        return self.market_value is None
+
+    @property
+    def days_held(self) -> int | None:
+        if self.inventory.acquired_date is None:
+            return None
+        return (date.today() - self.inventory.acquired_date).days
+
+
+def assess_card(session: Session, inventory: Inventory) -> CardAssessment:
+    """Build the full flip assessment for a single inventory row."""
+    status = str(inventory.status)
+    quantity = inventory.quantity or 0
+    cost_basis = inventory.cost_basis or 0.0
+    cost_per_copy = cost_basis / quantity if quantity else None
+
+    market_value_per_copy, source = effective_market_value(session, inventory)
+    target_roi = (inventory.target_roi_pct
+                  if inventory.target_roi_pct is not None
+                  else flip.DEFAULT_TARGET_ROI_PCT)
+
+    # Per-card exit assumptions feed the fee model; all None-safe.
+    exit_kwargs = {
+        "buyer_shipping_paid": inventory.buyer_shipping_paid,
+        "seller_shipping_cost": inventory.seller_shipping_cost,
+        "supplies_cost": inventory.supplies_cost,
+        "promoted_listing_pct": (inventory.promoted_listing_pct or 0.0) / 100,
+    }
+
+    net_if_sold = profit = roi_pct = needed = max_buy = None
+    if market_value_per_copy is not None:
+        # Max buy applies to any card with a market value (drives watch-list buys).
+        max_buy = flip.max_buy_price(market_value_per_copy, target_roi, **exit_kwargs)
+        # "If sold now" economics only make sense for cards you actually hold;
+        # for watching/sold/passed they'd be phantom numbers, so leave them None.
+        if status in ("owned", "listed") and quantity:
+            net_per_copy = flip.net_proceeds(market_value_per_copy,
+                                             **exit_kwargs).net_proceeds
+            net_if_sold = round(net_per_copy * quantity, 2)
+            profit, roi_pct = flip.profit_and_roi(net_if_sold, cost_basis)
+            needed = flip.needed_sale_price(cost_per_copy, target_roi, **exit_kwargs)
+
+    asking = inventory.lowest_active_ask
+    recommendation, reason = flip.recommend(
+        status=status,
+        market_value=market_value_per_copy,
+        cost_basis=cost_basis,
+        profit_now=profit,
+        roi_now=roi_pct,
+        target_roi_pct=target_roi,
+        asking_price=asking,
+        max_buy=max_buy,
+    )
+    return CardAssessment(
+        card=session.get(Card, inventory.card_id),
+        inventory=inventory,
+        status=status,
+        quantity=quantity,
+        cost_basis=cost_basis,
+        cost_per_copy=cost_per_copy,
+        market_value=market_value_per_copy,
+        market_source=source,
+        net_if_sold=net_if_sold,
+        profit=profit,
+        roi_pct=roi_pct,
+        target_roi_pct=target_roi,
+        needed_sale_price=needed,
+        max_buy=max_buy,
+        recommendation=recommendation,
+        reason=reason,
+    )
+
+
+def assess_cards(session: Session, *, owner: str = "") -> list[CardAssessment]:
+    """Assess every card the owner tracks, in id order. One row per inventory
+    record (watching, owned, listed, sold, or passed)."""
+    inventories = session.exec(
+        select(Inventory).where(Inventory.owner == owner).order_by(Inventory.card_id)
+    ).all()
+    return [assess_card(session, inv) for inv in inventories]

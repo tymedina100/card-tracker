@@ -13,6 +13,39 @@ net-after-fees calculator, unrealized and realized P&L, deal analyzer with
 max buy price, inventory status, price targets), and a Streamlit dashboard
 with popular-value dropdowns, per-account data isolation, and Google sign-in.
 
+## Flipping intelligence
+
+The dashboard answers one question for every card: **should I buy, hold,
+list, sell, or pass — and what would I actually net after eBay fees?**
+
+- **Recommendation engine** (`cardtracker/flip.py`): one place computes eBay
+  net proceeds, profit, ROI, max buy price, the sale price needed to hit a
+  target ROI, and a Buy / Hold / List / Sell Now / Pass / Underwater /
+  Missing Data / Sold recommendation with a plain-English reason. Every
+  input is optional and every division is guarded, so half-filled cards
+  never crash. All numbers flow from this module, so every page agrees.
+- **Manual market inputs.** Until automatic comps are reliable, each card
+  carries hand-entered values — current market value, last sold price,
+  lowest active ask, target ROI — plus exit assumptions (supplies, shipping,
+  promoted %). `effective_market_value` prefers the manual value and falls
+  back to comps, so automatic comps can populate the same fields later.
+- **Portfolio → Today's Actions:** Sell Candidates, Underwater Cards, Deals
+  Under Max Buy, Stale Inventory, Listed Cards, and Cards Missing Market
+  Value, above the cost/market/unrealized/realized headline metrics.
+- **Card detail** leads with a Position Summary box (paid, market, net if
+  sold, profit, ROI, target, needed sale price, recommendation, reason).
+- **Deals** has a manual analyzer: enter an asking price and a market value
+  and get the net at market, expected profit/ROI, max buy delivered, a
+  BUY / NEGOTIATE / PASS verdict, and how far the seller must come down.
+- **Cards** table shows cost, market, net, profit, ROI, and a colour-coded
+  recommendation, with filters for status, category, recommendation, search,
+  missing-market-only, and underwater-only.
+- **Data** page adds portfolio and cards CSV export, cards CSV import, and a
+  clearly labelled reset, with a reminder that hosted storage is temporary.
+
+eBay fee defaults: 13.25% final value fee, $0.40 fixed order fee, promoted
+listing and sales tax zero unless entered. All overridable per calculation.
+
 ## Dashboard
 
 ```powershell

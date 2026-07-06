@@ -51,6 +51,7 @@ class InventoryStatus(StrEnum):
     LISTED = "listed"
     SOLD = "sold"
     WATCHING = "watching"
+    PASSED = "passed"
 
 
 class PredictedDirection(StrEnum):
@@ -177,6 +178,20 @@ class Inventory(SQLModel, table=True):
     listed_price: float | None = None
     target_sell_price: float | None = None
     min_accept_price: float | None = None
+    # Manual market inputs. Until automatic comps are reliable, these hand-entered
+    # values drive the market-value, recommendation, and deal math. When automatic
+    # comps come online they can populate the same fields (see effective_market_value).
+    manual_market_value: float | None = None  # current market value, per copy
+    last_sold_price: float | None = None      # most recent known sold price
+    lowest_active_ask: float | None = None     # cheapest active listing seen
+    target_roi_pct: float | None = None        # per-card ROI goal for sell/list calls
+    date_listed: date | None = None            # when this card was listed for sale
+    # Per-card exit assumptions, fed into the eBay net-proceeds formula. All default
+    # to zero/none when unset so blank cards never break the calculations.
+    supplies_cost: float | None = None
+    buyer_shipping_paid: float | None = None
+    seller_shipping_cost: float | None = None
+    promoted_listing_pct: float | None = None
 
 
 class Prediction(SQLModel, table=True):

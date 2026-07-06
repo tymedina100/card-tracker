@@ -1,4 +1,4 @@
-"""Data management (CSV import, refresh, scoring) and calculators."""
+"""Data management (CSV import/export, refresh, backup, reset) and calculators."""
 
 import tempfile
 from collections import defaultdict
@@ -7,9 +7,9 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from cardtracker.fees import compute_net
-from cardtracker.models import Card
-from cardtracker.portfolio import market_value
+from cardtracker import flip
+from cardtracker.models import Card, Category, Grader
+from cardtracker.portfolio import assess_cards, delete_card, market_value
 from cardtracker.predict import score_due_predictions
 from cardtracker.sources import CsvImportError, CsvImportSource, save_comps
 from cardtracker.stats import refresh_snapshots
@@ -18,9 +18,7 @@ from cardtracker.webui.shared import (
     card_label,
     card_picker,
     current_owner,
-    fee_model,
     flash_and_rerun,
-    money,
     open_session,
     show_flash,
 )
@@ -31,14 +29,107 @@ CSV_EXAMPLE = """card_id,sold_date,price,shipping,currency,title,condition,listi
 1,2026-06-30,432.50,0,USD,Charizard Base Set Holo PSA 9 MINT,Graded,
 """
 
+# Columns of the cards export/import file. Kept in one place so export and
+# import always agree on the schema.
+CARD_COLUMNS = ["category", "player_or_character", "set_name", "year",
+                "card_number", "variation_or_parallel", "grader", "grade",
+                "cert_number", "notes"]
+
+
+def _cards_dataframe(cards: list[Card]) -> pd.DataFrame:
+    return pd.DataFrame([{
+        "id": c.id,
+        "category": str(c.category),
+        "player_or_character": c.player_or_character,
+        "set_name": c.set_name,
+        "year": c.year,
+        "card_number": c.card_number,
+        "variation_or_parallel": c.variation_or_parallel,
+        "grader": str(c.grader),
+        "grade": c.grade,
+        "cert_number": c.cert_number or "",
+        "notes": c.notes,
+    } for c in cards])
+
+
+def _portfolio_dataframe(assessments: list) -> pd.DataFrame:
+    """The full flip picture per card, for an export you can open in a sheet."""
+    return pd.DataFrame([{
+        "card": card_label(a.card),
+        "category": str(a.card.category),
+        "status": a.status,
+        "quantity": a.quantity,
+        "cost_basis": round(a.cost_basis, 2),
+        "market_value": a.market_value,
+        "net_if_sold": a.net_if_sold,
+        "profit": a.profit,
+        "roi_pct": a.roi_pct,
+        "target_roi_pct": a.target_roi_pct,
+        "needed_sale_price": a.needed_sale_price,
+        "recommendation": str(a.recommendation),
+    } for a in assessments])
+
+
+def _import_cards_from_df(df: pd.DataFrame, owner: str) -> tuple[int, list[str]]:
+    """Insert cards from an uploaded dataframe. Returns (added, errors)."""
+    errors: list[str] = []
+    added = 0
+    valid_categories = {c.value for c in Category}
+    valid_graders = {g.value for g in Grader}
+    with open_session() as session:
+        for i, row in df.iterrows():
+            line = i + 2  # header is line 1
+            category = str(row.get("category", "")).strip().lower()
+            player = str(row.get("player_or_character", "")).strip()
+            set_name = str(row.get("set_name", "")).strip()
+            if category not in valid_categories:
+                errors.append(f"line {line}: category '{category}' is not "
+                              f"{' or '.join(sorted(valid_categories))}")
+                continue
+            if not player or not set_name:
+                errors.append(f"line {line}: player_or_character and set_name required")
+                continue
+            grader = str(row.get("grader", "raw")).strip() or "raw"
+            if grader not in valid_graders:
+                grader = "raw"
+            try:
+                year = int(float(row.get("year", 0) or 0))
+            except (ValueError, TypeError):
+                year = 0
+            session.add(Card(
+                owner=owner,
+                category=Category(category),
+                player_or_character=player,
+                set_name=set_name,
+                year=year,
+                card_number=str(row.get("card_number", "") or "").strip(),
+                variation_or_parallel=str(row.get("variation_or_parallel", "") or "").strip(),
+                grader=Grader(grader),
+                grade=str(row.get("grade", "") or "").strip(),
+                cert_number=(str(row.get("cert_number", "")).strip() or None),
+                notes=str(row.get("notes", "") or "").strip(),
+            ))
+            added += 1
+        session.commit()
+    return added, errors
+
 
 def data_page() -> None:
     show_flash()
     page_header("Data",
-                "Import sold comps, refresh stats, score predictions, and export "
-                "your collection.")
+                "Import comps and cards, refresh stats, and back up your "
+                "collection. Your data is only as safe as your last export.")
     owner = current_owner()
 
+    st.warning(
+        "**Back up regularly.** On the free hosted (Streamlit Community Cloud) "
+        "tier, storage is temporary — the database can be wiped on redeploys or "
+        "when the app sleeps. Export your portfolio and cards below and keep the "
+        "files. A local install stores a durable database on disk.",
+        icon="💾",
+    )
+
+    # ---- Import sold comps (existing) ----
     st.subheader("Import sold comps from CSV")
     st.caption("Export solds from eBay Terapeak or build the file yourself. "
                "Required columns: sold_date (YYYY-MM-DD) and price. Optional: "
@@ -90,6 +181,7 @@ def data_page() -> None:
     with st.expander("CSV format example"):
         st.code(CSV_EXAMPLE, language="csv")
 
+    # ---- Maintenance (existing) ----
     st.divider()
     st.subheader("Maintenance")
     c1, c2 = st.columns(2)
@@ -109,37 +201,165 @@ def data_page() -> None:
             with open_session() as session:
                 scored = score_due_predictions(session, owner=owner)
             flash_and_rerun(f"Scored {scored} prediction(s).")
-    st.caption("To refresh automatically on a schedule, keep this running in a "
-               "terminal: cardtracker schedule-refresh --interval-hours 12")
 
+    # ---- Backup: export & import ----
     st.divider()
-    st.subheader("Export my collection")
-    st.caption("Download every card in your collection as a CSV backup.")
+    st.subheader("Backup: export & import")
     with open_session() as session:
         export_cards = all_cards(session, owner)
-    if export_cards:
-        export_df = pd.DataFrame([{
-            "id": c.id,
-            "category": str(c.category),
-            "player_or_character": c.player_or_character,
-            "set_name": c.set_name,
-            "year": c.year,
-            "card_number": c.card_number,
-            "variation_or_parallel": c.variation_or_parallel,
-            "grader": str(c.grader),
-            "grade": c.grade,
-            "cert_number": c.cert_number or "",
-            "notes": c.notes,
-        } for c in export_cards])
-        st.download_button(
-            "⬇️ Download cards CSV",
-            export_df.to_csv(index=False).encode("utf-8"),
-            file_name="cardtracker_cards.csv",
-            mime="text/csv",
-            key="export_cards",
-        )
+        assessments = assess_cards(session, owner=owner)
+    e1, e2, e3 = st.columns(3)
+    if assessments:
+        e1.download_button(
+            "⬇️ Export portfolio CSV",
+            _portfolio_dataframe(assessments).to_csv(index=False).encode("utf-8"),
+            file_name="cardtracker_portfolio.csv", mime="text/csv",
+            key="export_portfolio", help="Every card with cost, market, net, "
+            "profit, ROI, and recommendation.")
     else:
-        st.caption("No cards to export yet.")
+        e1.caption("No holdings to export yet.")
+    if export_cards:
+        e2.download_button(
+            "⬇️ Download cards backup",
+            _cards_dataframe(export_cards).to_csv(index=False).encode("utf-8"),
+            file_name="cardtracker_cards.csv", mime="text/csv",
+            key="export_cards", help="Your card catalog, re-importable below.")
+    else:
+        e2.caption("No cards to export yet.")
+
+    with e3.popover("⬆️ Import cards from CSV"):
+        st.caption(f"Columns: {', '.join(CARD_COLUMNS)}. Extra columns are ignored.")
+        cards_file = st.file_uploader("Cards CSV", type=["csv"], key="cards_import_file")
+        if cards_file is not None and st.button("Import cards", key="cards_import_btn"):
+            try:
+                df = pd.read_csv(cards_file)
+            except Exception as exc:  # noqa: BLE001 surface any parse error in UI
+                st.error(f"Could not read CSV: {exc}")
+            else:
+                added, errors = _import_cards_from_df(df, owner)
+                if errors:
+                    st.warning("Some rows were skipped:\n\n" + "\n".join(
+                        f"- {e}" for e in errors[:20]))
+                if added:
+                    flash_and_rerun(f"Imported {added} card(s).")
+                else:
+                    st.error("No cards imported. Check the column names and values.")
+
+    # ---- Danger zone: reset demo data ----
+    st.divider()
+    with st.expander("⚠️ Reset — delete all my cards"):
+        st.caption("Permanently deletes every card in your collection along with "
+                   "its comps, stats, buys, sells, and predictions. Export a "
+                   "backup first. This cannot be undone.")
+        confirm = st.checkbox("I understand — delete everything", key="reset_confirm")
+        if st.button("🗑️ Delete all my data", disabled=not confirm, key="reset_btn"):
+            with open_session() as session:
+                ids = [c.id for c in all_cards(session, owner)]
+                for cid in ids:
+                    delete_card(session, cid, owner=owner)
+            flash_and_rerun(f"Deleted {len(ids)} card(s) and all related data.")
+
+
+def _net_calculator() -> None:
+    """Net-after-fees, driven entirely by the flip engine."""
+    c1, c2, c3 = st.columns(3)
+    sale_price = c1.number_input("Sale price", 0.0, value=100.0, step=5.0,
+                                 format="%.2f", key="net_price")
+    buyer_ship = c2.number_input("Shipping buyer pays", 0.0, step=0.5,
+                                 format="%.2f", key="net_ship_charged")
+    tax = c3.number_input("Sales tax eBay collects", 0.0, step=0.5, format="%.2f",
+                          key="net_tax")
+    c4, c5, c6 = st.columns(3)
+    seller_ship = c4.number_input("Seller shipping cost", 0.0, step=0.5,
+                                  format="%.2f", key="net_ship_cost")
+    supplies = c5.number_input("Supplies cost", 0.0, step=0.25, format="%.2f",
+                               key="net_supplies")
+    promoted = c6.number_input("Promoted listing %", 0.0, 20.0, step=0.5,
+                               format="%.1f", key="net_promoted")
+    c7, c8 = st.columns(2)
+    fee_rate = c7.number_input("Fee rate %", 0.0, 30.0,
+                               value=flip.DEFAULT_FEE_RATE * 100, step=0.25,
+                               format="%.2f", key="net_fee_rate")
+    fixed_fee = c8.number_input("Fixed order fee", 0.0,
+                                value=flip.DEFAULT_FIXED_ORDER_FEE, step=0.05,
+                                format="%.2f", key="net_fixed_fee")
+
+    result = flip.net_proceeds(
+        sale_price, buyer_shipping_paid=buyer_ship, sales_tax_collected=tax,
+        seller_shipping_cost=seller_ship, supplies_cost=supplies,
+        promoted_listing_pct=promoted / 100, fee_rate=fee_rate / 100,
+        fixed_order_fee=fixed_fee)
+
+    rows = [
+        {"item": "Gross sale total (buyer pays)", "amount": result.gross_sale_total},
+        {"item": f"eBay final value fee ({fee_rate:.2f}% + ${fixed_fee:.2f})",
+         "amount": -result.ebay_fee},
+        {"item": f"Promoted listing fee ({promoted:.1f}%)",
+         "amount": -result.promoted_fee},
+        {"item": "Seller shipping cost", "amount": -seller_ship},
+        {"item": "Supplies cost", "amount": -supplies},
+    ]
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    m1, m2 = st.columns(2)
+    m1.metric("Net proceeds", f"${result.net_proceeds:,.2f}")
+    margin = result.net_margin_pct
+    m2.metric("Net margin", f"{margin:.1f}%" if margin is not None else "n/a")
+    if tax:
+        st.caption("Sales tax raises the fee base but never reaches the seller.")
+
+
+def _max_buy_calculator() -> None:
+    """Max buy price from a manually entered (or comp-derived) market value."""
+    owner = current_owner()
+    prefill = 400.0
+    with open_session() as session:
+        card = card_picker(session, owner, key="maxbuy_card")
+        if card is not None:
+            market = market_value(session, card.id)
+            if market is not None:
+                prefill = round(market[0], 2)
+
+    c1, c2, c3 = st.columns(3)
+    expected = c1.number_input("Expected sale / market value", 0.0, value=prefill,
+                               step=5.0, format="%.2f", key="maxbuy_market")
+    target_roi = c2.number_input("Target ROI %", 0.0, 500.0, 20.0, step=5.0,
+                                 key="maxbuy_roi")
+    asking = c3.number_input("Asking price (optional, 0 = none)", 0.0, step=5.0,
+                             format="%.2f", key="maxbuy_asking")
+    c4, c5, c6 = st.columns(3)
+    ship = c4.number_input("Shipping + supplies cost", 0.0, step=0.5, format="%.2f",
+                           key="maxbuy_ship")
+    fee_rate = c5.number_input("Fee rate %", 0.0, 30.0,
+                               value=flip.DEFAULT_FEE_RATE * 100, step=0.25,
+                               format="%.2f", key="maxbuy_fee_rate")
+    fixed_fee = c6.number_input("Fixed order fee", 0.0,
+                                value=flip.DEFAULT_FIXED_ORDER_FEE, step=0.05,
+                                format="%.2f", key="maxbuy_fixed_fee")
+
+    if not expected:
+        st.info("Enter an expected sale / market value to compute a max buy price.")
+        return
+
+    kwargs = dict(seller_shipping_cost=ship, fee_rate=fee_rate / 100,
+                  fixed_order_fee=fixed_fee)
+    net_at_market = flip.net_proceeds(expected, **kwargs).net_proceeds
+    max_buy = flip.max_buy_price(expected, target_roi, **kwargs)
+    # A safety buffer: pay a little under max buy to leave room for a soft market.
+    safety = round(max_buy * 0.95, 2) if max_buy is not None else None
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Net if sold at market", f"${net_at_market:,.2f}")
+    m2.metric("Max buy (delivered)", f"${max_buy:,.2f}" if max_buy is not None else "n/a")
+    m3.metric("Safe buy (5% buffer)", f"${safety:,.2f}" if safety is not None else "n/a")
+    if asking and max_buy is not None:
+        if asking <= max_buy:
+            st.success(f"At ${asking:,.2f} this clears your {target_roi:.0f}% "
+                       f"target with ${max_buy - asking:,.2f} to spare. Buy.")
+        else:
+            st.error(f"At ${asking:,.2f} you're ${asking - max_buy:,.2f} over max "
+                     f"buy for a {target_roi:.0f}% return. Negotiate or pass.")
+    st.caption("Pay at or below max buy, delivered (price plus shipping), and "
+               "selling at your expected market hits the target after fees.")
 
 
 def calculator_page() -> None:
@@ -147,78 +367,7 @@ def calculator_page() -> None:
     page_header("Calculators",
                 "Net-after-fees and max-buy-price, live as you type.")
     net_tab, maxbuy_tab = st.tabs(["💵 Net after fees", "🎯 Max buy price"])
-
     with net_tab:
-        c1, c2, c3 = st.columns(3)
-        sale_price = c1.number_input("Sale price", 0.0, value=100.0, step=5.0,
-                                     format="%.2f", key="net_price")
-        shipping_charged = c2.number_input("Shipping the buyer pays", 0.0,
-                                           step=0.5, format="%.2f",
-                                           key="net_ship_charged")
-        tax = c3.number_input("Sales tax eBay collects", 0.0, step=0.5,
-                              format="%.2f", key="net_tax")
-        c4, c5 = st.columns(2)
-        shipping_cost = c4.number_input("What shipping costs me", 0.0, step=0.5,
-                                        format="%.2f", key="net_ship_cost")
-        promoted = c5.number_input("Promoted listing %", 0.0, 20.0, step=0.5,
-                                   format="%.1f", key="net_promoted")
-        breakdown = compute_net(fee_model(), sale_price,
-                                shipping_charged=shipping_charged,
-                                tax_collected=tax, shipping_cost=shipping_cost,
-                                promoted_pct=promoted or None)
-        rows = [{"item": "gross to seller",
-                 "amount": round(breakdown.gross_to_seller, 2)}]
-        rows += [{"item": line.label, "amount": -line.amount}
-                 for line in breakdown.lines]
-        if shipping_cost:
-            rows.append({"item": "shipping cost", "amount": -shipping_cost})
-        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-        st.metric("Net proceeds", money(breakdown.net),
-                  delta=f"-{money(breakdown.total_fees + shipping_cost)} "
-                  "total costs")
-        if tax:
-            st.caption("Sales tax raises the fee base but never reaches the "
-                       "seller.")
-
+        _net_calculator()
     with maxbuy_tab:
-        from cardtracker.deals import max_buy_price
-
-        with open_session() as session:
-            card = card_picker(session, current_owner(), key="maxbuy_card")
-            if card is None:
-                st.info("Add a card first to compute its max buy price.")
-                return
-            has_market = market_value(session, card.id) is not None
-            c1, c2, c3 = st.columns(3)
-            mode = c1.radio("Target", ["ROI %", "Profit $"], key="maxbuy_mode",
-                            horizontal=True)
-            if mode == "ROI %":
-                roi = c2.number_input("Target ROI %", 1.0, 500.0, 30.0, step=5.0,
-                                      key="maxbuy_roi")
-                profit = None
-            else:
-                profit = c2.number_input("Target profit $", 1.0, value=25.0,
-                                         step=5.0, key="maxbuy_profit")
-                roi = None
-            ship = c3.number_input("Assumed resale shipping cost", 0.0, step=0.5,
-                                   format="%.2f", key="maxbuy_ship")
-            if not has_market:
-                st.info("No market data for this card yet. Import sold comps or "
-                        "pull asks, then refresh stats.")
-                return
-            result = max_buy_price(session, card.id, fee_model(),
-                                   target_roi_pct=roi, target_profit=profit,
-                                   shipping_cost=ship)
-        flag = " *" if result.market_price_type == "ask" else ""
-        m1, m2, m3 = st.columns(3)
-        with m1:
-            st.metric(f"Market ({result.market_price_type} median){flag}",
-                      money(result.market))
-        with m2:
-            st.metric("Net if sold at market", money(result.net_at_market))
-        with m3:
-            st.metric("Max buy price (delivered)", money(result.max_buy))
-        if flag:
-            st.caption("* market stat from ask median, no sold data")
-        st.caption("Pay this or less, delivered (price plus shipping), and "
-                   "selling at today's market hits your target after fees.")
+        _max_buy_calculator()
