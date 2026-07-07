@@ -522,7 +522,7 @@ def card_detail_page() -> None:
 
     with pull_tab, st.form("pull_comps"):
         query = st.text_input("eBay search terms", value=describe_card(card),
-                              key="pull_query")
+                              key=f"pull_query_{card.id}")
         limit = st.slider("Max listings", 10, 200, 50, key="pull_limit")
         if st.form_submit_button("Pull active listings", type="primary"):
             settings = get_settings()
