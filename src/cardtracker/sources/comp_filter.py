@@ -58,7 +58,8 @@ def _matches_card(title: str, card: Card) -> bool:
         if pairs:
             return False  # a graded slab is not a raw card
     else:
-        target = (card.grader.value.upper(), card.grade.strip())
+        # grader may be a Grader enum or a plain str when loaded from the DB.
+        target = (str(card.grader).upper(), card.grade.strip())
         if not any(pair == target for pair in pairs):
             return False  # wrong grade, wrong grader, or no grade shown
 

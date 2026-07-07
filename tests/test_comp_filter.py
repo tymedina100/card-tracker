@@ -142,6 +142,27 @@ def test_parallel_card_requires_its_keywords():
     assert len(dropped) == 1
 
 
+def test_grade_filter_on_db_loaded_card(session):
+    """A card loaded from the DB has grader as a plain str, not a Grader enum.
+
+    Regression: the filter must not assume card.grader is an enum member.
+    """
+    card = base_psa9()
+    session.add(card)
+    session.commit()
+    reloaded = session.get(Card, card.id)
+    assert isinstance(reloaded.grader, str)  # DB round-trip yields a str
+    kept, dropped = filter_comps_for_card(
+        [
+            rec("2024 Bowman Chrome U Cooper Flagg #16 Base PSA 9"),
+            rec("2024 Bowman Chrome U Cooper Flagg #16 PSA 10"),
+        ],
+        reloaded,
+    )
+    assert len(kept) == 1
+    assert len(dropped) == 1
+
+
 def test_bgs_half_grade_matches():
     card = Card(
         category=Category.SPORTS,
