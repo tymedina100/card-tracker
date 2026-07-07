@@ -12,7 +12,13 @@ from cardtracker.config import load_settings
 from cardtracker.db import get_engine, get_session, init_db
 from cardtracker.ebay_auth import MissingCredentialsError
 from cardtracker.models import Card, Category, Comp, Grader, describe_card
-from cardtracker.sources import BrowseApiSource, CsvImportError, CsvImportSource, save_comps
+from cardtracker.sources import (
+    BrowseApiSource,
+    CsvImportError,
+    CsvImportSource,
+    filter_comps_for_card,
+    save_comps,
+)
 from cardtracker.stats import latest_snapshots, refresh_snapshots
 
 app = typer.Typer(help="Track card price comps and market stats.", no_args_is_help=True)
@@ -116,21 +122,28 @@ def pull_comps(
     card_id: Annotated[int, typer.Argument(help="Card id to attach comps to")],
     query: Annotated[str, typer.Option("--query", help="eBay search terms")],
     limit: Annotated[int, typer.Option(help="Max listings to pull")] = 50,
+    strict: Annotated[
+        bool, typer.Option(help="Drop autos, parallels, and other grades that "
+                           "do not match this card")
+    ] = True,
 ) -> None:
     """Pull active listings (ask prices) from the eBay Browse API."""
     settings, engine = _engine()
     with get_session(engine) as session:
-        _get_card_or_exit(session, card_id)
+        card = _get_card_or_exit(session, card_id)
         source = BrowseApiSource(settings)
         try:
             records = source.fetch_comps(query, limit=limit)
         except MissingCredentialsError as exc:
             typer.secho(str(exc), fg="red")
             raise typer.Exit(code=1) from None
-        saved = save_comps(session, card_id, source, records)
+        kept, dropped = filter_comps_for_card(records, card, strict=strict)
+        saved = save_comps(session, card_id, source, kept)
+        dropped_note = (f", filtered out {len(dropped)} off-match listing(s)"
+                        if dropped else "")
         typer.secho(
             f"Saved {len(saved)} ask comps for card {card_id} "
-            f"(source: browse, env: {settings.ebay_env})",
+            f"(source: browse, env: {settings.ebay_env}){dropped_note}",
             fg="green",
         )
 
