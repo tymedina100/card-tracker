@@ -38,7 +38,7 @@ from cardtracker.reference import (
     players_for,
     sets_for,
 )
-from cardtracker.sources import BrowseApiSource, save_comps
+from cardtracker.sources import BrowseApiSource, filter_comps_for_card, save_comps
 from cardtracker.stats import latest_snapshots, refresh_snapshots
 from cardtracker.webui.shared import (
     ASK_COLOR,
@@ -524,16 +524,24 @@ def card_detail_page() -> None:
         query = st.text_input("eBay search terms", value=describe_card(card),
                               key=f"pull_query_{card.id}")
         limit = st.slider("Max listings", 10, 200, 50, key="pull_limit")
+        strict = st.checkbox(
+            "Strict match (drop autos, parallels, and other grades)",
+            value=True, key="pull_strict",
+            help="Keeps only listings whose title matches this card's grade "
+                 "and parallel. Turn off for obscure cards with few listings.")
         if st.form_submit_button("Pull active listings", type="primary"):
             settings = get_settings()
             try:
                 source = BrowseApiSource(settings)
                 records = source.fetch_comps(query, limit=limit)
+                kept, dropped = filter_comps_for_card(records, card, strict=strict)
                 with open_session() as session:
-                    saved = save_comps(session, card.id, source, records)
+                    saved = save_comps(session, card.id, source, kept)
                     refresh_snapshots(session, card_id=card.id, owner=owner)
+                dropped_note = (f", filtered out {len(dropped)} off-match listing(s)"
+                                if dropped else "")
                 flash_and_rerun(f"Saved {len(saved)} ask comps and refreshed "
-                                f"stats ({settings.ebay_env}).")
+                                f"stats ({settings.ebay_env}){dropped_note}.")
             except MissingCredentialsError as exc:
                 st.warning(str(exc))
             except Exception as exc:  # noqa: BLE001 surface eBay errors in the UI
