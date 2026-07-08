@@ -142,6 +142,60 @@ def test_parallel_card_requires_its_keywords():
     assert len(dropped) == 1
 
 
+def test_grade_filter_on_db_loaded_card(session):
+    """A card loaded from the DB has grader as a plain str, not a Grader enum.
+
+    Regression: the filter must not assume card.grader is an enum member.
+    """
+    card = base_psa9()
+    session.add(card)
+    session.commit()
+    reloaded = session.get(Card, card.id)
+    assert isinstance(reloaded.grader, str)  # DB round-trip yields a str
+    kept, dropped = filter_comps_for_card(
+        [
+            rec("2024 Bowman Chrome U Cooper Flagg #16 Base PSA 9"),
+            rec("2024 Bowman Chrome U Cooper Flagg #16 PSA 10"),
+        ],
+        reloaded,
+    )
+    assert len(kept) == 1
+    assert len(dropped) == 1
+
+
+def authentic_card() -> Card:
+    return Card(
+        category=Category.SPORTS,
+        player_or_character="Cooper Flagg",
+        set_name="Bowman Chrome U",
+        year=2024,
+        card_number="16",
+        grader=Grader.PSA,
+        grade="Authentic",
+    )
+
+
+def test_authentic_grade_keeps_authentic_listings():
+    records = [
+        rec("2024 Bowman Chrome U Cooper Flagg #16 PSA Authentic"),
+        rec("2024 Bowman Chrome U Cooper Flagg #16 PSA AUTH"),
+        rec("2024 Bowman Chrome U Cooper Flagg #16 PSA 9"),
+    ]
+    kept, dropped = filter_comps_for_card(records, authentic_card())
+    assert titles(kept) == [
+        "2024 Bowman Chrome U Cooper Flagg #16 PSA Authentic",
+        "2024 Bowman Chrome U Cooper Flagg #16 PSA AUTH",
+    ]
+    assert len(dropped) == 1  # the numeric PSA 9 is a different grade
+
+
+def test_numeric_card_drops_authentic_listing():
+    kept, _ = filter_comps_for_card(
+        [rec("2024 Bowman Chrome U Cooper Flagg #16 PSA Authentic")], base_psa9()
+    )
+    assert kept == []
+
+
 def test_bgs_half_grade_matches():
     card = Card(
         category=Category.SPORTS,

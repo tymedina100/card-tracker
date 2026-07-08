@@ -19,11 +19,19 @@ from cardtracker.models import Card, Grader
 from cardtracker.sources.base import CompRecord
 
 # A grader token followed, within a few non-digit characters, by its grade.
-# Matches "PSA 9", "PSA GEM MT 10", "BGS 9.5", and "PSA10" (no space).
+# Matches "PSA 9", "PSA GEM MT 10", "BGS 9.5", "PSA10" (no space), and the
+# non-numeric "PSA Authentic" / "PSA Auth" grade. The non-greedy skip lets
+# qualifier words ("GEM MT", "MINT") sit between the grader and the grade.
 _GRADE_RE = re.compile(
-    r"\b(PSA|BGS|SGC|CGC)[^0-9]{0,12}?(10|[1-9](?:\.5)?)\b",
+    r"\b(PSA|BGS|SGC|CGC)[^0-9]{0,12}?(10|[1-9](?:\.5)?|authentic|auth)\b",
     re.IGNORECASE,
 )
+
+
+def _norm_grade(grade: str) -> str:
+    """Normalize a grade for comparison: lower-cased, 'auth' folded to 'authentic'."""
+    g = grade.strip().lower()
+    return "authentic" if g == "auth" else g
 
 # Words that mark a parallel, insert, autograph, or memorabilia card. A plain
 # base card is none of these, so their presence means a different product.
@@ -40,8 +48,9 @@ _AUTO_RE = re.compile(r"\bauto(graph(ed)?)?\b", re.IGNORECASE)
 
 
 def _grade_pairs(title: str) -> list[tuple[str, str]]:
-    """All (grader, grade) pairs mentioned in a title, upper-cased grader."""
-    return [(g.upper(), n) for g, n in _GRADE_RE.findall(title)]
+    """All (grader, grade) pairs mentioned in a title, grader upper-cased and
+    grade normalized (lower-cased, 'auth' folded to 'authentic')."""
+    return [(g.upper(), _norm_grade(n)) for g, n in _GRADE_RE.findall(title)]
 
 
 def _matches_card(title: str, card: Card) -> bool:
@@ -58,7 +67,8 @@ def _matches_card(title: str, card: Card) -> bool:
         if pairs:
             return False  # a graded slab is not a raw card
     else:
-        target = (card.grader.value.upper(), card.grade.strip())
+        # grader may be a Grader enum or a plain str when loaded from the DB.
+        target = (str(card.grader).upper(), _norm_grade(card.grade))
         if not any(pair == target for pair in pairs):
             return False  # wrong grade, wrong grader, or no grade shown
 
